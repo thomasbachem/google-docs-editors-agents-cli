@@ -233,7 +233,7 @@ GTOOLS_RETRIES sets the number of attempts (default 3, 0 disables, capped at
 A 429 that names a PER-MINUTE quota is a different failure and gets a different
 answer: fixed, announced pauses that outlast the sliding 60-second window
 (GTOOLS_QUOTA_WAIT, default "20,40"; 0 turns the waiting off). No jittered
-backoff setting covers both – see README.md.
+backoff setting covers both – see REFERENCE.md.
 
 GTOOLS_STATS=1 prints what a run spent, per quota, on stderr as it exits:
 
