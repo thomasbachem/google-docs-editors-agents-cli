@@ -291,7 +291,11 @@ more than a handful of calls: a process start costs roughly 0.3s, which
 dominates a script issuing dozens.
 
 ```python
-import sys; sys.path.insert(0, "/path/to/google-docs-editors-agents-cli")
+import os, shutil, sys
+# Derive the checkout from the installed command rather than writing its path down:
+# `install` symlinks into the checkout, so this keeps resolving when it moves.
+CHECKOUT = os.path.dirname(os.path.realpath(shutil.which("gsheets")))
+sys.path.insert(0, CHECKOUT)
 from gsheets import Client
 from gdocs import Document
 
@@ -306,6 +310,12 @@ sheet.cells("Tab!A1:C9", fields="sheets.data.rowData.values(effectiveValue)")
 doc = Document(url_or_id, tab="t.0")
 doc.append("Text")
 ```
+
+Importing is not enough on its own: the interpreter running your script has to be
+one the dependencies are installed for. `os.path.join(CHECKOUT, ".venv", "bin",
+"python")` is that interpreter, which is what a runner spawning child steps should
+hand them. A plain `python3` resolves the modules and then dies on
+`ModuleNotFoundError: No module named 'googleapiclient'`.
 
 The commands **are** these methods with argument parsing and printing wrapped
 around them, so nothing is reimplemented on either side and the guards apply
