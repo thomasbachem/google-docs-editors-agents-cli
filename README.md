@@ -26,7 +26,17 @@ claims stand on; `AGENTS.md` is for working on the tool rather than with it.
 
 ## Setup on a new machine
 
-Steps 1–3 are once per machine, step 4 once per Google account.
+Steps 0–3 are once per machine, step 4 once per Google account.
+
+**0. Get the code**
+
+```
+git clone https://github.com/thomasbachem/google-docs-editors-agents-cli
+cd google-docs-editors-agents-cli
+```
+
+`install` symlinks rather than copies, so wherever this lands stays the tool's home – worth a
+long-lived directory rather than whatever project you happen to be in.
 
 **1. Python and the two dependencies**
 
@@ -41,12 +51,12 @@ everything else arrives as a dependency of those two.
 
 **2. A Google Cloud project with the two APIs enabled**
 
-Create a project at `https://console.cloud.google.com/projectcreate`. On a Workspace account leave
+Create a project at https://console.cloud.google.com/projectcreate. On a Workspace account leave
 *Location* set to the organization rather than "No organization" – step 3 needs a project the domain
 owns. Then enable both APIs inside it:
 
-- `https://console.cloud.google.com/apis/library/sheets.googleapis.com`
-- `https://console.cloud.google.com/apis/library/docs.googleapis.com`
+- https://console.cloud.google.com/apis/library/sheets.googleapis.com
+- https://console.cloud.google.com/apis/library/docs.googleapis.com
 
 Leave the Drive API off: requesting no Drive scope is what keeps these tools unable to delete,
 move, rename or share anything – see **Credentials**. Put the project id in `.project`; no code
