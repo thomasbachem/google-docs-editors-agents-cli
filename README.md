@@ -68,11 +68,12 @@ Under **Google Auth Platform**, in that same project:
 - *Branding* – an app name and your own address as the support email
 - *Audience* – **Internal**, on a Workspace domain you administer: no test users, no publishing,
   no verification, no warning screen.
-- *Clients* → *Create client* → application type **Desktop app**. Download the JSON and save it in
-  this directory as `client_secret.json`.
+- *Clients* → *Create client* → application type **Desktop app**. Download the JSON – step 4 takes
+  it out of `~/Downloads` on its own, or name it: `python3 auth.py <path>`.
 
 Desktop app is not cosmetic: `auth.py` completes the flow against a local server on a random port,
-which only that client type permits.
+which only that client type permits – and it refuses any other type up front, because a Web client
+gets as far as the consent screen and then fails on a redirect mismatch that names nothing.
 
 **If Internal is greyed out**, the project was created outside the organization – move or recreate
 it there rather than taking External as the way around, which costs a seven-day token expiry that
