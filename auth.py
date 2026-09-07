@@ -140,7 +140,7 @@ def main():
         sys.exit(
             f"missing {secrets}\n"
             "Create an OAuth client (type: Desktop app) in your Google Cloud project\n"
-            f"and download the JSON – see README.md, step 3. It is taken from\n"
+            f"and download the JSON – see README.md, step 2. It is taken from\n"
             f"{DOWNLOADS} on its own, or name it: python3 auth.py <path>."
         )
 
@@ -151,14 +151,14 @@ def main():
         kind = next(iter(json.load(open(secrets))), "")
     except (ValueError, OSError) as err:
         sys.exit(f"cannot read {secrets}: {err}\n"
-                 "Re-download the client JSON – see README.md, step 3.")
+                 "Re-download the client JSON – see README.md, step 2.")
     if kind != "installed":
         sys.exit(
             f"{secrets} is a {kind!r} client, not a Desktop app.\n"
             "run_local_server() below needs the Desktop type: a Web client has no\n"
             "redirect URI for localhost and fails mid-consent with a mismatch that\n"
             "names neither cause nor fix. Create a client of type Desktop app and\n"
-            "replace this file – see README.md, step 3."
+            "replace this file – see README.md, step 2."
         )
 
     previous = ""

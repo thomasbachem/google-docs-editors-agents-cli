@@ -121,7 +121,7 @@ case $err in
     *"Traceback (most recent call last):"*|*SyntaxError:*)
         echo "install: $TARGET/gsheets resolves but crashes, so it is not usable yet:" >&2
         echo "         $(printf '%s' "$err" | tail -1)" >&2
-        echo "         Most likely the dependencies – see README.md, step 1." >&2
+        echo "         Most likely the dependencies – see README.md, step 4." >&2
         exit 1
         ;;
 esac

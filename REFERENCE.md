@@ -46,7 +46,7 @@ window, and it is their sum Google meters. Set `GTOOLS_STATS` to a **path**
 rather than `1`, and every process appends there while all of them read the
 whole file:
 
-```
+```sh
 GTOOLS_STATS=/tmp/build-calls.jsonl ./bauen.py
 ```
 
@@ -103,7 +103,7 @@ atexit.unregister(gauth.print_stats)
 `gsheets objects <sheet>` counts duplicates; `--duplicates` prints the
 `batchUpdate` requests that remove them, and sends nothing:
 
-```
+```sh
 gsheets batch <sheet> "$(gsheets objects <sheet> --duplicates)"
 ```
 
@@ -229,7 +229,7 @@ Measured: after a plain `update`, `userEnteredFormat.textFormat.link` and `hyper
 gone, while the background on that same cell survived. So clearing rich text only reaches a sheet
 whose values stay put; where a generator rewrites every value, it is never the reason to reset.
 
-```
+```sh
 gsheets reset <sheet> <tab ...>          # formatting, notes, validations, rich text, merges
 gsheets reset <sheet> <tab ...> --sizes  # row/column sizes and hidden flags too
 ```
@@ -339,10 +339,39 @@ carries the retry too, which the client library does not do by default.
 `gauth.http_error_message(err)` formats an `HttpError` the way the CLIs print
 it, for callers that want the same one-liner.
 
+## Running it from another machine
+
+The directory is often reached over a mount – another host, a VM, a cloud agent with the folder
+shared in. The code runs fine there; the install does not travel with it.
+
+`.venv` holds binaries for the OS it was built on, so `./.venv/bin/python` is simply missing on
+anything else – and a second one inside the mount would collide with the first. Build it outside the
+mount and name it:
+
+```sh
+python3 -m venv ~/.venvs/gtools
+~/.venvs/gtools/bin/python -m pip install google-api-python-client google-auth-oauthlib
+export GTOOLS_PYTHON=~/.venvs/gtools/bin/python
+```
+
+`GTOOLS_PYTHON` is used exactly as given, so a wrong one fails loudly rather than falling back
+behind your back. Without it the wrappers try `python3` on `PATH`, which needs those same two
+packages and nothing more – but that install fails wherever PEP 668 marks the system Python
+externally managed: Debian 12 and up, Ubuntu 23.04 and up, Fedora, Homebrew. Older images still
+accept `--user`, so let the refusal tell you which you are on rather than assuming.
+
+The wrappers are `/bin/sh` and resolve their own symlink chain, so a mount, a rename and a symlink
+on `PATH` all work. Why that takes more than swapping the shebang is commented in the wrappers
+themselves.
+
+On Python older than the version `google-api-core` wants, every invocation opens with a
+`FutureWarning`. It goes to **stderr**, so only a merged stream is polluted – `PYTHONWARNINGS=ignore`
+silences it either way.
+
 ## Environment
 
 `GTOOLS_PYTHON` picks the interpreter the `gsheets`/`gdocs` wrappers exec, overriding both the
-bundled `.venv` and the `python3` fallback – see **Running it from another machine** in `README.md`.
+bundled `.venv` and the `python3` fallback – the section above is what it is for.
 
 `GTOOLS_RETRIES` sets how many times a transient failure (429, 5xx) is retried: default 3, `0`
 disables, capped at 10. `GTOOLS_QUOTA_WAIT` sets the fixed pauses used to sit out a per-minute

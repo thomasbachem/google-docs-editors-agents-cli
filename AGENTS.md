@@ -7,6 +7,22 @@ prints that instead of Google's 403.
 Run `gsheets` or `gdocs` bare for the usage text – the reference for what these APIs get wrong,
 and worth reading before you add a flag.
 
+## The layout
+
+| Path | Role |
+|---|---|
+| `gsheets`, `gdocs` | `/bin/sh` wrappers – self-locating through symlinks, so the directory can be renamed and they can go on `PATH` |
+| `gsheets.py`, `gdocs.py` | the two CLIs |
+| `gauth.py` | shared token handling, flag parsing, retries, error formatting |
+| `auth.py` | one-time browser consent |
+| `token.json`, `client_secret.json` | credentials, mode 600 – never tracked, never shared |
+| `scratch.local` | your own scratch surface ids, untracked – see **Leave the scratch surfaces empty** |
+| `install` | symlink `gsheets` and `gdocs` onto `PATH` |
+| `REFERENCE.md` | measured API behaviour, the in-process API, the environment variables |
+| `AGENTS.md`, `CLAUDE.md` | what an agent working ON this repo needs; the second is a symlink to the first |
+| `dev/` | the offline test suite |
+| `LICENSE` | MIT |
+
 ## Measure, do not reason
 
 Every claim here was checked against the live API. The ones that were reasoned about instead were

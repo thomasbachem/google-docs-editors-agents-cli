@@ -108,7 +108,7 @@ try:
     check("a crashing tool is not reported as verified",
           code != 0 and "verified:" not in out, f"exit {code}")
     check("and the cause is named, not the traceback's first line",
-          "ModuleNotFoundError" in out and "README.md, step 1" in out)
+          "ModuleNotFoundError" in out and "README.md, step 4" in out)
 
     # google-api-core warns on every call under Python before 3.11, to stderr. Merged
     # into stdout it arrives ahead of the account, and the warning became the thing we
