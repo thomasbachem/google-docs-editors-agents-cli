@@ -262,7 +262,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from gauth import (DryRun, RetryingRequest, ToolError, account, as_int,
-                   credentials, http_error_message, load_json, send, split_flags)
+                   credentials, http_error_message, load_json, project, send,
+                   split_flags)
 
 # "0.125", "1.234.567" – strings a non-English locale mis-parses (grouped
 # integer) or refuses to parse at all (left as text). Never the intended number.
@@ -1054,6 +1055,9 @@ def dispatch():
 
     if cmd == "whoami":
         print(account() or "unknown – re-run auth.py to record the account")
+        proj = project()
+        if proj:
+            print(f"project: {proj}")
         return
 
     if len(argv) < 3:

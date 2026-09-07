@@ -59,8 +59,7 @@ owns. Then enable both APIs inside it:
 - https://console.cloud.google.com/apis/library/docs.googleapis.com
 
 Leave the Drive API off: requesting no Drive scope is what keeps these tools unable to delete,
-move, rename or share anything – see **Credentials**. Put the project id in `.project`; no code
-reads it, but the URLs above need it the day a third API is wanted.
+move, rename or share anything – see **Credentials**.
 
 **3. An OAuth client of type Desktop app**
 
@@ -177,7 +176,7 @@ another person is the line, not moving them off this disk.
 Scopes: `spreadsheets`, `documents`, `openid`, `userinfo.email`. Drive-backed features therefore
 fail by design – smart chips in Sheets return HTTP 403.
 
-Enabling another Google API for these tools is done in the project named in `.project`, at
+Enabling another Google API for these tools is done in the project `gsheets whoami` names, at
 `https://console.cloud.google.com/apis/library?project=<id>`. A missing one surfaces as
 `HTTP 403: … has not been used in project … before or it is disabled`, with the activation URL in
 the message.
@@ -203,7 +202,6 @@ refresh token is revoked – expiry alone is handled automatically.
 | `auth.py` | one-time browser consent |
 | `token.json`, `client_secret.json` | credentials, mode 600 – never tracked, never shared |
 | `scratch.local` | your own scratch surface ids, untracked – see `AGENTS.md` |
-| `.project` | the Google Cloud project id backing the OAuth client |
 | `install` | symlink `gsheets` and `gdocs` onto `PATH` |
 | `REFERENCE.md` | measured API behaviour, the in-process API, the environment variables |
 | `AGENTS.md`, `CLAUDE.md` | what an agent working ON this repo needs; the second is a symlink to the first |

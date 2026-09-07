@@ -23,6 +23,7 @@ from googleapiclient.http import HttpRequest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN = os.path.join(HERE, "token.json")
+SECRETS = os.path.join(HERE, "client_secret.json")
 
 # The backoff sleeps rand() * 2**attempt seconds, so the cost roughly doubles
 # each time: 3 attempts cost at most ~14s, 10 would cost ~17 minutes on the last
@@ -331,6 +332,16 @@ def account():
     if email and data.get("email_source") != "id_token":
         return f"{email} (inferred – run auth.py to confirm with Google)"
     return email
+
+
+def project():
+    """Project id behind the OAuth client. Read from the client file so nothing –
+    an agent least of all – has to open a credential to answer "which project?"."""
+    try:
+        with open(SECRETS) as f:
+            return json.load(f).get("installed", {}).get("project_id", "")
+    except (OSError, ValueError):
+        return ""
 
 
 def write_token(data, path=None):

@@ -109,6 +109,10 @@ def use_token(email="tester@example.com", source="id_token", scopes=None):
                    "scopes": scopes if scopes is not None
                    else [gauth.SHEETS_SCOPE, gauth.DOCS_SCOPE]}, f)
     gauth.TOKEN = path
+    fd, spath = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        json.dump({"installed": {"project_id": "test-project-42"}}, f)
+    gauth.SECRETS = spath
     return path
 
 
@@ -146,7 +150,10 @@ print("=== gdocs.py branches (fake API) ===")
 token_path = use_token()
 
 out, _ = run(["gdocs", "whoami"])
-check("whoami prints the account", out.strip() == "tester@example.com", out.strip())
+check("whoami prints the account", out.splitlines()[0] == "tester@example.com",
+      out.splitlines()[0])
+check("and the project, so nothing opens the credential file to learn it",
+      "project: test-project-42" in out, out.splitlines()[-1])
 
 out, err = run(["gdocs", "create", "Mein Dokument"])
 check("create prints the document URL", "document/d/FAKEDOC/edit" in out, out.splitlines()[0])

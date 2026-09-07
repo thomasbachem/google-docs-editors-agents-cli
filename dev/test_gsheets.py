@@ -155,6 +155,10 @@ def use_token(email="tester@example.com", source="id_token"):
     with os.fdopen(fd, "w") as f:
         json.dump({"email": email, "email_source": source}, f)
     gauth.TOKEN = path
+    fd, spath = tempfile.mkstemp(suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        json.dump({"installed": {"project_id": "test-project-42"}}, f)
+    gauth.SECRETS = spath
     return path
 
 
@@ -188,7 +192,10 @@ print("=== gsheets.py branches (fake API) ===")
 token_path = use_token()
 
 out, _ = run(["gsheets", "whoami"])
-check("whoami prints the account", out.strip() == "tester@example.com", out.strip())
+check("whoami prints the account", out.splitlines()[0] == "tester@example.com",
+      out.splitlines()[0])
+check("and the project, so nothing opens the credential file to learn it",
+      "project: test-project-42" in out, out.splitlines()[-1])
 
 out, err = run(["gsheets", "create", "My Sheet"])
 check("create prints the URL", "spreadsheets/d/FAKEID" in out)
@@ -680,7 +687,7 @@ check("the retry count is more than zero", gauth.RETRIES > 0, str(gauth.RETRIES)
 # an unattested address must say so, so `create` cannot give false reassurance
 use_token(email="tester@example.com", source="inferred")
 out, _ = run(["gsheets", "whoami"])
-check("inferred account is labelled", "inferred" in out, out.strip())
+check("inferred account is labelled", "inferred" in out, out.splitlines()[0])
 
 os.unlink(token_path)
 if os.path.exists(gauth.TOKEN):

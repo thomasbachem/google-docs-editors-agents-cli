@@ -88,7 +88,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, account,
-                   as_int, credentials, http_error_message, load_json,
+                   as_int, credentials, http_error_message, load_json, project,
                    require_scope, send, split_flags)
 
 DOC_URL = "https://docs.google.com/document/d/{}/edit"
@@ -367,6 +367,9 @@ def dispatch():
 
     if cmd == "whoami":
         print(account() or "unknown – re-run auth.py to record the account")
+        proj = project()
+        if proj:
+            print(f"project: {proj}")
         return
 
     if len(argv) < 3:
