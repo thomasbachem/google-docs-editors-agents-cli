@@ -1,0 +1,24 @@
+#!/bin/sh
+# Self-locating, so this directory can be renamed AND the wrapper can be symlinked
+# into a PATH dir. ${0:A:h} would be shorter but is zsh-only – under /bin/sh it
+# expands to nothing at all, silently. The loop is what :A did: without it a
+# symlinked wrapper looks for gdocs.py next to the symlink and finds nothing.
+SELF=$0
+while [ -L "$SELF" ]; do
+    link=$(readlink "$SELF")
+    case $link in
+        /*) SELF=$link ;;
+        *) SELF=$(dirname -- "$SELF")/$link ;;
+    esac
+done
+HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)
+# A copy mounted from another OS carries a .venv full of foreign binaries, so fall
+# back to python3 on PATH rather than dying. GTOOLS_PYTHON forces a choice and is
+# used as given, so a wrong one fails loudly instead of falling back.
+if [ -n "${GTOOLS_PYTHON:-}" ]; then
+    PY=$GTOOLS_PYTHON
+else
+    PY="$HERE/.venv/bin/python"
+    [ -x "$PY" ] || PY=python3
+fi
+exec "$PY" "$HERE/gdocs.py" "$@"

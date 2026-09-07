@@ -1,0 +1,17 @@
+# Credentials. Personal, mode 600, and the reason a copy of this repo still needs
+# its own Google Cloud project – see README, "Credentials".
+client_secret.json
+token.json
+token.json.bak
+
+# The Cloud project id backing the OAuth client: one per person.
+.project
+
+# Scratch surface ids for live checks: one per person.
+scratch.local
+
+# Built per machine, and full of binaries for the OS that built it.
+.venv/
+__pycache__/
+
+.DS_Store
