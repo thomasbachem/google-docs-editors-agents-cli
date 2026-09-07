@@ -1,8 +1,8 @@
 # google-docs-editors-agents-cli
 
-Command-line access to the **Google Docs editors**, for the agents that drive them and the people
-driving the agents. Two of the editors today, over their official APIs, sharing one OAuth client
-and one token:
+Command-line access to the **Google Docs editors**, written to be driven by an agent – Claude Code,
+Claude Cowork, or anything else with a shell – and readable by the person supervising it. Two of the
+editors today, over their official APIs, sharing one OAuth client and one token:
 
 - `gsheets` – create, read and edit spreadsheets
 - `gdocs` – create, read and edit documents
@@ -96,6 +96,57 @@ which decides whether internal domain-owned apps are trusted.
 
 `auth.py` opens a browser consent and writes `token.json`. That file and `client_secret.json` are
 personal from here on – **Credentials** says what that means.
+
+## Putting it on PATH
+
+```
+./install                  # symlinks gsheets and gdocs into ~/.local/bin
+./install /usr/local/bin    # or wherever you keep commands
+```
+
+Symlinks rather than copies, so the installed commands keep following this checkout: edit it or
+`git pull` it and there is nothing to reinstall.
+
+This matters more for an agent than for a person. Anything that has to *find* the tool ends up
+guessing a path, and a guessed path rots the first time the directory moves – this one moved twice
+in an afternoon. `command -v gsheets` does not rot.
+
+`install` refuses a name that belongs to somebody else's command, and repoints one of ours that a
+move left dangling – that second case is the collision you will actually hit, and it is the one
+that leaves "command not found" behind. `--force` overrides the refusal. It also tells you when the
+target is not on your `PATH`, when a different `gsheets` comes first on it, and when the tools
+resolve but crash for want of the dependencies – and it will not say the bare name works when
+it does not.
+
+That last one matters here more than most places. Adding the directory to your shell profile fixes
+your own shell and nothing an agent runs: a plain `bash -c` is neither a login nor an interactive
+shell, so it reads neither `.profile` nor `.bashrc` – and that is the shape agents, cron jobs and
+CI steps use. For those, install into a directory already on `PATH`, or call the full path.
+
+`--claude-md` adds a short section to `~/.claude/CLAUDE.md` (or `$CLAUDE_CONFIG_DIR`), so
+sessions in other projects reach for these commands instead of a browser or connector – without
+it an agent that has never seen this repo has no reason to try. A plain run offers the flag
+rather than taking it: this is the only file we write into that you authored, so it appends
+between markers, never rewrites, and stands down when the file already covers the subject.
+Removing it is deleting the marked block.
+
+## Driving it from Claude
+
+Three things decide whether a surface can run these, and it either has them or does not:
+**a shell**, **network to `googleapis.com`**, and **the token**.
+
+- **Claude Code** runs on your machine and has all three the moment `install` has run. A skill or
+  prompt can then probe with `command -v gsheets` instead of hunting for a checkout.
+- **Cowork** has a shell and a network, so the token is the only open question. Mount or upload it
+  and it works: this tool was first driven from a Linux VM with the owner's folders mounted under
+  `$HOME/mnt`, which is exactly that arrangement.
+- **The claude.ai app** cannot run a command at all, and wants the Google Drive connector instead.
+  A skill should try the command, fall back to the connector, and say which it used.
+- **Anything else with a shell** – a CI job, a cron entry – needs nothing special.
+
+The usage text those commands print is written for that reader: every trap it names was measured
+against the live API rather than reasoned about, because a wrong claim costs an agent a silent bad
+write rather than a raised eyebrow.
 
 ## Running it from another machine
 
@@ -452,6 +503,7 @@ house style to re-apply, not something a reset can guess.
 | `token.json`, `client_secret.json` | credentials, mode 600 – never tracked, never shared |
 | `scratch.local` | your own scratch surface ids, untracked |
 | `.project` | the Google Cloud project id backing the OAuth client |
+| `install` | symlink `gsheets` and `gdocs` onto `PATH` |
 | `dev/` | the offline test suite |
 | `LICENSE` | MIT – use it, adapt it, no warranty, which matters for a tool that writes to live files |
 
@@ -502,9 +554,14 @@ it, for callers that want the same one-liner.
 
 ## Credentials
 
-`token.json` and `client_secret.json` are personal and stay in this directory. The **code** is
-shareable, the credentials are not – a copy for someone else needs its own Google Cloud project and
-its own consent.
+`token.json` and `client_secret.json` are personal. The **code** is shareable, the credentials are
+not – a copy for **another person** needs its own Google Cloud project and its own consent.
+
+Personal means per-person, not per-machine. Copying your own token into a cloud sandbox running
+your own agent is not sharing it, and is a reasonable thing to do – it is what makes the cloud
+sessions under **Driving it** work at all. What bounds that decision is the scope list below: a token that escapes
+can change the contents of files someone names, and cannot delete, move, share or even enumerate
+anything. Handing the pair to another person is the line, not moving them off this disk.
 
 Scopes: `spreadsheets`, `documents`, `openid`, `userinfo.email`. There is no Drive scope, so
 neither tool can delete, move, rename or share a file, and Drive-backed features fail by design –

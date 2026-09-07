@@ -1,0 +1,194 @@
+#!/bin/sh
+# Put `gsheets` and `gdocs` on PATH, so anything driving them can say
+# `gsheets whoami` instead of guessing where this checkout lives. A guessed path
+# rots the first time the directory moves; a name on PATH does not.
+#
+#   ./install [target-dir]      default: ~/.local/bin
+#   ./install --force [dir]     replace commands of the same name that are not ours
+#   ./install --claude-md [dir] also add a short section to ~/.claude/CLAUDE.md, so
+#                               sessions in other projects know these commands exist
+#
+# Symlinks, not copies: the wrappers resolve their own link chain, so an install
+# keeps following this checkout as it is edited, and `git pull` needs no reinstall.
+
+set -e
+
+SELF=$0
+while [ -L "$SELF" ]; do
+    link=$(readlink "$SELF")
+    case $link in
+        /*) SELF=$link ;;
+        *) SELF=$(dirname -- "$SELF")/$link ;;
+    esac
+done
+HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)
+
+FORCE=no
+CLAUDE_MD=no
+TARGET=""
+for arg in "$@"; do
+    case $arg in
+        --force) FORCE=yes ;;
+        --claude-md) CLAUDE_MD=yes ;;
+        -*) echo "install: unknown option $arg" >&2; exit 2 ;;
+        *) TARGET=$arg ;;
+    esac
+done
+[ -n "$TARGET" ] || TARGET="$HOME/.local/bin"
+
+mkdir -p "$TARGET" || { echo "install: cannot create $TARGET" >&2; exit 1; }
+TARGET=$(CDPATH= cd -- "$TARGET" && pwd -P)
+
+# An existing name is one of three things, and only one of them is a refusal.
+for tool in gsheets gdocs; do
+    src="$HERE/$tool"
+    dest="$TARGET/$tool"
+    [ -x "$src" ] || { echo "install: $src is missing or not executable" >&2; exit 1; }
+
+    if [ -L "$dest" ]; then
+        link=$(readlink "$dest")
+        case $link in
+            /*) abs=$link ;;
+            *) abs="$TARGET/$link" ;;
+        esac
+        dir=$(CDPATH= cd -- "$(dirname -- "$abs")" 2>/dev/null && pwd -P) || dir=""
+        [ -n "$dir" ] && abs="$dir/$(basename -- "$abs")"
+        if [ "$abs" = "$src" ]; then
+            echo "  $tool already points here"
+        elif [ ! -e "$dest" ]; then
+            # Dangling: an install from before this checkout moved. The likeliest
+            # collision by far, and the one that leaves "command not found" behind.
+            echo "  $tool was a broken link to $abs – repointing"
+        elif [ "$FORCE" = yes ]; then
+            echo "  $tool pointed at $abs – replaced (--force)"
+        else
+            echo "install: $dest already points at $abs, which is not this checkout." >&2
+            echo "         Re-run with --force to replace it." >&2
+            exit 1
+        fi
+    elif [ -e "$dest" ]; then
+        if [ "$FORCE" = yes ]; then
+            echo "  $tool was a file at $dest – replaced (--force)"
+        else
+            echo "install: $dest exists and is not a symlink – left alone." >&2
+            echo "         Re-run with --force to replace it." >&2
+            exit 1
+        fi
+    fi
+    ln -sfn "$src" "$dest"
+done
+
+echo "installed into $TARGET"
+
+case ":$PATH:" in
+    *":$TARGET:"*) ;;
+    *)
+        echo
+        echo "NOTE: $TARGET is not on your PATH. For your own shell, add to your profile:"
+        echo "          export PATH=\"$TARGET:\$PATH\""
+        echo "      That will not reach a plain \`bash -c\` – what an agent, a cron job or a"
+        echo "      CI step runs, which reads neither .profile nor .bashrc. Those need a"
+        echo "      directory already on PATH, or the full path $TARGET/gsheets."
+        ;;
+esac
+
+# Whatever answers to the name now is what a skill will get – say so if it is not us.
+first=$(command -v gsheets 2>/dev/null || true)
+if [ -n "$first" ] && [ "$first" != "$TARGET/gsheets" ]; then
+    echo
+    echo "NOTE: Another gsheets comes first on your PATH:"
+    echo "      $first"
+    echo "      Yours is at $TARGET/gsheets – reorder PATH if you meant ours."
+fi
+
+# Prove the link chain by running THROUGH the name, not through the path. Either
+# the account or the "no token" hint means it resolved and executed.
+# stdout is the answer, stderr the diagnostics – keep them apart. Merged, google-api-core's
+# FutureWarning (every call, on Python before 3.11) lands ahead of the account, and
+# "verified: gsheets -> …FutureWarning…" is not a verification of anything.
+errf=$(mktemp) || { echo "install: cannot create a temp file" >&2; exit 1; }
+out=$(PATH="$TARGET:$PATH" gsheets whoami 2>"$errf") && status=0 || status=$?
+err=$(cat "$errf"); rm -f "$errf"
+if [ "$status" -eq 127 ]; then
+    echo "install: $TARGET/gsheets does not run – link chain broken" >&2
+    exit 1
+fi
+# A crash is not the same as "no token yet". The second is the expected state here –
+# you install before you authorize – but the first means every later call fails the
+# same way, and reporting "verified" over it is how an agent comes to believe a
+# broken install worked and then hits the traceback mid-task.
+case $err in
+    *"Traceback (most recent call last):"*|*SyntaxError:*)
+        echo "install: $TARGET/gsheets resolves but crashes, so it is not usable yet:" >&2
+        echo "         $(printf '%s' "$err" | tail -1)" >&2
+        echo "         Most likely the dependencies – see README.md, step 1." >&2
+        exit 1
+        ;;
+esac
+answer=${out%%
+*}
+[ -n "$answer" ] || answer=$(printf '%s' "$err" | tail -1)
+
+resolved=$(command -v gsheets 2>/dev/null || true)
+# Compare directories physically: $TARGET came from `pwd -P`, while PATH carries
+# whatever text the caller put there – /var and /private/var name one directory on
+# macOS, and a string compare would call our own install a stranger.
+resolved_dir=""
+[ -n "$resolved" ] && resolved_dir=$(CDPATH= cd -- "$(dirname -- "$resolved")" 2>/dev/null && pwd -P)
+if [ "$resolved_dir" = "$TARGET" ]; then
+    echo "verified: gsheets -> $answer"
+else
+    # The verification above prepended $TARGET, so it says the tool runs – not that
+    # anyone typing the name will reach it. Do not let the reassurance stand alone.
+    echo "verified: $TARGET/gsheets -> $answer"
+    if [ -n "$resolved" ]; then
+        echo "          but bare \`gsheets\` finds $resolved instead"
+    else
+        echo "          but bare \`gsheets\` is not found – see the NOTE above"
+    fi
+fi
+
+# --- the global-instructions section (--claude-md) ---
+# Sessions in other projects have no reason to know these commands exist, and a
+# line in the agent's own instructions is what fixes that. This is the only
+# authored file we touch, so it is opt-in and append-only: nothing here rewrites
+# or deletes a range, which is why there is no merge and no way to lose what you
+# wrote. Removing it is deleting the marked block by hand.
+MD_DIR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+MD=$MD_DIR/CLAUDE.md
+MARK="google-docs-editors-agents-cli"
+
+md_present() { [ -f "$MD" ] && grep -q "$MARK:begin" "$MD"; }
+
+if [ "$CLAUDE_MD" = yes ]; then
+    echo
+    if md_present; then
+        echo "the section is already in $MD – left alone"
+    elif [ -f "$MD" ] && hit=$(grep -n 'gsheets\|gdocs' "$MD" | head -1) && [ -n "$hit" ]; then
+        # Their own wording, or another copy of this repo's. Either way one section
+        # is enough, and stacking a second would leave two answers to the same question.
+        echo "install: $MD already mentions these commands – left alone." >&2
+        echo "         line ${hit%%:*} reads:${hit#*:}" >&2
+    else
+        mkdir -p "$MD_DIR" || { echo "install: cannot create $MD_DIR" >&2; exit 1; }
+        # A file whose last line has no newline would swallow our marker into it.
+        if [ -s "$MD" ] && [ -n "$(tail -c 1 "$MD")" ]; then printf '\n' >> "$MD"; fi
+        {
+            if [ -s "$MD" ]; then printf '\n'; fi
+            printf '%s\n' "<!-- $MARK:begin (added by ./install --claude-md – delete through :end to remove) -->"
+            printf '%s\n' "## Google Sheets & Docs"
+            printf '%s\n' "Use the \`gsheets\` / \`gdocs\` CLIs rather than a browser or connector for Google Sheets"
+            printf '%s\n' "and Docs – they use the official APIs, take several ranges per call, and cannot touch"
+            printf '%s\n' "anything but the file you name. Run either bare for the usage text."
+            printf '%s\n' "<!-- $MARK:end -->"
+        } >> "$MD"
+        echo "added the section to $MD"
+    fi
+elif [ -d "$MD_DIR" ] && ! md_present; then
+    # Only where there is a Claude home to speak of – without one this would be
+    # advice about a file the user does not have.
+    echo
+    echo "NOTE: Sessions in other projects have no reason to know these exist."
+    echo "      ./install --claude-md adds a short section to $MD saying to"
+    echo "      prefer them over a browser or connector."
+fi

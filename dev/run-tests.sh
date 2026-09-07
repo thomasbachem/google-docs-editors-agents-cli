@@ -24,6 +24,8 @@ echo
 "$PY" "$HERE/test_gsheets.py" || rc=1
 echo
 "$PY" "$HERE/test_gdocs.py" || rc=1
+echo
+"$PY" "$HERE/test_install.py" || rc=1
 rm -rf "$HERE/../__pycache__" "$HERE/__pycache__"
 echo
 if [ $rc -eq 0 ]; then echo "all tests passed"; else echo "TESTS FAILED"; fi
