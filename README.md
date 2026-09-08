@@ -178,6 +178,10 @@ contents of files someone names and nothing else, so Drive-backed features fail 
 chips in Sheets return HTTP 403. Handing the pair to another person is the line, not moving them off
 this disk.
 
+Where they move to differs by task. A Cowork task on the local VM mounts the folder from this
+disk; one running in the cloud copies what it uses into a container, and its approval dialog
+says so. If you would rather the pair never left the machine, that dialog is where to decline.
+
 Another Google API is enabled in the project `gsheets whoami` names, at
 `https://console.cloud.google.com/apis/library?project=<id>`. A missing one surfaces as
 `HTTP 403: … has not been used in project … before or it is disabled`, with the activation URL in
