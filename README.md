@@ -20,9 +20,10 @@ It is a property of the token, not a setting in the code, so it holds however wr
 caller goes, which is what makes these safe to point at a spreadsheet someone depends on.
 
 Run either bare for its usage text – the command reference, naming the traps each API hides:
-locale parsing, link normalization, index shift. `REFERENCE.md` holds the measurements those
-claims stand on, the in-process API, the environment variables and running this over a mount;
-`AGENTS.md` is for working on the tool rather than with it.
+locale parsing, link normalization, index shift. Both are also Python modules, the cheaper path for
+a script making dozens of calls: the commands are those methods with argument parsing around them.
+`REFERENCE.md` holds that API, the measurements these claims stand on, the environment variables and
+running this over a mount; `AGENTS.md` is for working on the tool rather than with it.
 
 ## Setup
 

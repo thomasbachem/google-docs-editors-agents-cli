@@ -168,6 +168,20 @@ try:
           body.count("google-docs-editors-agents-cli:begin") == 1
           and body.count("google-docs-editors-agents-cli:end") == 1)
     check("appending, so what was there is untouched", body.startswith("# mine\n\n## Something\nkeep me\n"))
+    # A bare name that is not found reads as "absent" and is silently traded for the
+    # browser – so where PATH will not reach them, the section has to say where they are.
+    check("and says where they are when the bare name will not find them",
+          "not on this PATH" in body and os.path.realpath(target) in body,
+          next((l for l in body.splitlines() if "not on this PATH" in l), "")[:60])
+
+    on_md = os.path.join(box, "onpath-md")
+    on_home = os.path.join(box, "onpath-claude")
+    os.makedirs(on_home)
+    run("--claude-md", on_md, claude_home=on_home,
+        env_extra={"PATH": on_md + ":/usr/bin:/bin"})
+    on_body = open(os.path.join(on_home, "CLAUDE.md")).read()
+    check("and stays quiet about PATH when the bare name already works",
+          "## Google Sheets & Docs" in on_body and "not on this PATH" not in on_body)
 
     code, out = run("--claude-md", target, claude_home=md_home)
     check("a second run does not add a second copy",

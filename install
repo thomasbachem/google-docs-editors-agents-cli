@@ -137,7 +137,9 @@ resolved_dir=""
 [ -n "$resolved" ] && resolved_dir=$(CDPATH= cd -- "$(dirname -- "$resolved")" 2>/dev/null && pwd -P)
 if [ "$resolved_dir" = "$TARGET" ]; then
     echo "verified: gsheets -> $answer"
+    BARE_WORKS=yes
 else
+    BARE_WORKS=no
     # The verification above prepended $TARGET, so it says the tool runs – not that
     # anyone typing the name will reach it. Do not let the reassurance stand alone.
     echo "verified: $TARGET/gsheets -> $answer"
@@ -177,9 +179,17 @@ if [ "$CLAUDE_MD" = yes ]; then
             if [ -s "$MD" ]; then printf '\n'; fi
             printf '%s\n' "<!-- $MARK:begin (added by ./install --claude-md – delete through :end to remove) -->"
             printf '%s\n' "## Google Sheets & Docs"
-            printf '%s\n' "Use the \`gsheets\` / \`gdocs\` CLIs rather than a browser or connector for Google Sheets"
+            printf '%s\n' "Use the \`gsheets\`/\`gdocs\` CLIs rather than a browser or connector for Google Sheets"
             printf '%s\n' "and Docs – they use the official APIs, take several ranges per call, and cannot touch"
-            printf '%s\n' "anything but the file you name. Run either bare for the usage text."
+            printf '%s\n' "anything but the file you name. Run either bare for the usage text; both are"
+            printf '%s\n' "also Python modules, which beats a process per call for a script making dozens."
+            # Only where it bites: on a PATH that already finds them this is noise, and
+            # a bare name that is not found is otherwise read as "absent" and silently
+            # traded for the browser – the failure this whole section exists to prevent.
+            if [ "$BARE_WORKS" = no ]; then
+                printf '%s\n' "Not found under the bare name does not mean absent: they are at $TARGET,"
+                printf '%s\n' "which is not on this PATH – call them from there rather than a browser."
+            fi
             printf '%s\n' "<!-- $MARK:end -->"
         } >> "$MD"
         echo "added the section to $MD"
