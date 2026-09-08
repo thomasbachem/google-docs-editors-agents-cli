@@ -488,6 +488,7 @@ def direct(fn):
 print("\n--- Document, called directly ---")
 use_token()
 doc = gdocs.Document("ID", service=Docs(TAB_DOC))
+check("Document.api() hands back the service it drives", doc.api() is doc.service)
 
 kind, msg = direct(lambda: gdocs.Document("", service=Docs(TAB_DOC)))
 check("an empty id raises instead of exiting", kind == "ToolError", f"{kind}: {str(msg)[:40]}")

@@ -257,6 +257,14 @@ class Document:
         self.tab = tab
         self.dry = dry
 
+    def api(self):
+        """The service this drives, for anything these methods do not cover.
+
+        Same object as the module-level api(), reached from an instance –
+        `doc.api()` is the obvious guess, and guessing wrong costs a call.
+        """
+        return self.service
+
     def raw(self):
         """The whole document, tab content included."""
         return self.service.get(documentId=self.id, includeTabsContent=True).execute()

@@ -719,6 +719,14 @@ class Client:
         self.service = service or api()
         self.dry = dry
 
+    def api(self):
+        """The service this drives, for anything these methods do not cover.
+
+        Same object as the module-level api(), reached from an instance –
+        `sheet.api()` is the obvious guess, and guessing wrong costs a call.
+        """
+        return self.service
+
     def info(self):
         """Spreadsheet metadata: title, locale, and every tab's properties."""
         return self.service.get(spreadsheetId=self.id).execute()

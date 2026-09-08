@@ -718,6 +718,8 @@ for name, call in (
     check(f"{name} raises instead of exiting", kind == "ToolError", f"{kind}: {str(msg)[:40]}")
 
 check("Client(service=…) uses the service it was given", client.service is not None)
+check("and hands it back from api(), the guess an agent makes first",
+      client.api() is client.service)
 check("update_many returns a plain cell count",
       isinstance(client.update_many({"A!A1": [[1]]}), int))
 check("read always returns range-tagged blocks",

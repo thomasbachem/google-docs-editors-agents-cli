@@ -334,7 +334,8 @@ Client(first, service=svc)
 Client(second, service=svc)
 ```
 
-`api()` returns the raw service for anything the classes do not cover. It now
+`api()` returns the raw service for anything the classes do not cover, and each
+instance hands its own back the same way – `sheet.api()`, `doc.api()`. It now
 carries the retry too, which the client library does not do by default.
 `gauth.http_error_message(err)` formats an `HttpError` the way the CLIs print
 it, for callers that want the same one-liner.
