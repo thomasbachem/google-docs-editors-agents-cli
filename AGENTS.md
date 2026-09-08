@@ -20,6 +20,7 @@ and worth reading before you add a flag.
 | `install` | symlink `gsheets` and `gdocs` onto `PATH` |
 | `REFERENCE.md` | measured API behaviour, the in-process API, the environment variables |
 | `AGENTS.md`, `CLAUDE.md` | what an agent working ON this repo needs; the second is a symlink to the first |
+| `skill/` | the Cowork skill, built into an upload by `install --skill` – see `README.md` |
 | `dev/` | the offline test suite |
 | `LICENSE` | MIT |
 

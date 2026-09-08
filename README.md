@@ -131,6 +131,9 @@ other projects reach for these commands instead of a browser or connector. A pla
 flag rather than taking it: it appends between markers, never rewrites, and stands down when the
 file already covers the subject. Removing it is deleting the marked block.
 
+That file is Claude Code's own; Cowork reads no instruction file from disk and takes a skill
+instead – see **Installing the skill**.
+
 ## Driving it from Claude
 
 Three things decide whether a surface can run these: **a shell**, **network to `googleapis.com`**,
@@ -142,6 +145,22 @@ and **the token**.
   and it works.
 - **The claude.ai app** cannot run a command at all, and wants the Google Drive connector instead.
   A skill should try the command, fall back to the connector, and say which it used.
+
+## Installing the skill
+
+Cowork reads no instruction file from disk, so `--claude-md` does not reach it; a skill does. The
+skill is at `skill/`, and it is uploaded rather than installed from here: zip that directory and
+add it under *Settings → Skills*. An uploaded skill belongs to the account rather than to one app,
+so it reaches Cowork and Claude Code alike.
+
+Its name and description then sit in the session's context and the body loads only when
+a task looks like spreadsheet work. The skill probes for the commands, installs them where the
+sandbox home starts empty and the checkout is connected – which is every new Cowork task – and
+falls back to the Drive connector when neither holds, saying which route it took so a silent slow
+path is never mistaken for a fast one.
+
+For a sentence rather than a skill, *Settings → Cowork → Global instructions* takes standing text
+that applies to every session.
 
 ## Credentials
 
