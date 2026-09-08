@@ -68,6 +68,11 @@ owns. Then enable both APIs:
 
 Leave Drive off – **Credentials** says why that absence is the point.
 
+A third API later goes in this same project: `gsheets whoami` prints its id, and the library for it
+is at `https://console.cloud.google.com/apis/library?project=<id>`. A missing one surfaces as
+`HTTP 403: … has not been used in project … before or it is disabled`, with the activation URL in
+the message.
+
 **2. An OAuth client of type Desktop app**
 
 Under *Google Auth Platform*, in that same project:
@@ -163,8 +168,8 @@ instead – see **Installing the skill**.
 ## Driving it from Claude
 
 Three things decide whether a surface can run these: **a shell**, **network to `googleapis.com`**,
-and **the token**. Anything holding all three can, which is what a command-line tool means – but
-the surfaces below are the ones it has actually been used on, so they are the ones described here.
+and **the token**. Anything holding all three can run them; the surfaces below are the ones this has
+actually been used on.
 
 - **Claude Code** – and anything else with a shell, a CI job or a cron entry – has all three the
   moment `install` has run. Probe with `command -v gsheets` rather than hunting for a checkout.
@@ -176,8 +181,7 @@ the surfaces below are the ones it has actually been used on, so they are the on
 
 ## Installing the skill
 
-Cowork reads no instruction file from disk, so `--claude-md` does not reach it; a skill does. The
-skill is at `skill/SKILL.md`, and it is uploaded rather than installed from here.
+The skill is at `skill/SKILL.md`, and it is uploaded rather than installed from here.
 
 `./install --skill` builds `google-sheets-docs.zip` with this checkout's path written into it, and
 *Settings → Skills* takes it. An uploaded skill belongs to the account rather than to one app, so
@@ -209,11 +213,6 @@ this disk.
 Where they move to differs by task. A Cowork task on the local VM mounts the folder from this
 disk; one running in the cloud copies what it uses into a container, and its approval dialog
 says so. If you would rather the pair never left the machine, that dialog is where to decline.
-
-Another Google API is enabled in the project `gsheets whoami` names, at
-`https://console.cloud.google.com/apis/library?project=<id>`. A missing one surfaces as
-`HTTP 403: … has not been used in project … before or it is disabled`, with the activation URL in
-the message.
 
 ## Re-authorizing
 
