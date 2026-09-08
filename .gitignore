@@ -10,6 +10,9 @@ token.json.bak
 # Scratch surface ids for live checks: one per person.
 scratch.local
 
+# Built per machine, and carries this checkout's path – see install --skill.
+google-sheets-docs.zip
+
 # Built per machine, and full of binaries for the OS that built it.
 .venv/
 __pycache__/

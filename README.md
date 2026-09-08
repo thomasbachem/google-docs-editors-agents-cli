@@ -149,9 +149,13 @@ and **the token**.
 ## Installing the skill
 
 Cowork reads no instruction file from disk, so `--claude-md` does not reach it; a skill does. The
-skill is at `skill/`, and it is uploaded rather than installed from here: zip that directory and
-add it under *Settings → Skills*. An uploaded skill belongs to the account rather than to one app,
-so it reaches Cowork and Claude Code alike.
+skill is at `skill/SKILL.md`, and it is uploaded rather than installed from here.
+
+`./install --skill` builds `google-sheets-docs.zip` with this checkout's path written into it, and
+*Settings → Skills* takes it. An uploaded skill belongs to the account rather than to one app, so
+it reaches Cowork and Claude Code alike. Zipping the directory by hand works too, minus the path –
+and then every task begins by searching for the checkout before it can ask for it. Nothing tracks
+the checkout for you, so a change means building and uploading again.
 
 Its name and description then sit in the session's context and the body loads only when
 a task looks like spreadsheet work. The skill probes for the commands, installs them where the

@@ -24,12 +24,13 @@ def check(name, cond, detail=""):
         fails.append(name)
 
 
-def run(*args, claude_home=None, env_extra=None):
+def run(*args, claude_home=None, env_extra=None, cwd=None):
     env = dict(os.environ)
     if claude_home is not None:
         env["CLAUDE_CONFIG_DIR"] = claude_home
     env.update(env_extra or {})
-    r = subprocess.run([INSTALL, *args], capture_output=True, text=True, env=env)
+    r = subprocess.run([INSTALL, *args], capture_output=True, text=True, env=env,
+                       cwd=cwd)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -63,6 +64,36 @@ try:
     check("an install on PATH verifies through the bare name",
           code == 0 and "verified: gsheets ->" in out and "but bare" not in out,
           next((l for l in out.splitlines() if l.startswith("verified:")), "")[:64])
+
+
+    # --skill: the package is the only thing that tells a Cowork task where this
+    # checkout is, so what it must never do is ship without the path in it.
+    import zipfile
+    shed = os.path.join(box, "shed")
+    os.makedirs(shed)
+    code, out = run("--skill", os.path.join(box, "skillbin"), cwd=shed)
+    built = os.path.join(shed, "google-sheets-docs.zip")
+    check("--skill builds the package beside you, not in the checkout",
+          code == 0 and os.path.isfile(built)
+          and not os.path.exists(os.path.join(ROOT, "google-sheets-docs.zip")),
+          f"exit {code}")
+    with zipfile.ZipFile(built) as z:
+        names = z.namelist()
+        body = z.read("google-sheets-docs/SKILL.md").decode()
+    check("it holds exactly the skill, at the path an upload expects",
+          names == ["google-sheets-docs/SKILL.md"], str(names))
+    check("the checkout's own path is written into it", ROOT in body,
+          next((l for l in body.splitlines() if ROOT in l), "")[:70])
+    check("and the published skill's own text is still there",
+          "## Using it" in body and "gsheets whoami" in body)
+    check("the built path is named on stdout, so it can be found again",
+          built in out, next((l for l in out.splitlines() if "built" in l), "")[:70])
+    # Rebuilt after an edit is the normal case; a second run must not append to
+    # the first zip or leave the old body behind.
+    code, out = run("--skill", os.path.join(box, "skillbin"), cwd=shed)
+    with zipfile.ZipFile(built) as z:
+        check("a rebuild replaces the package rather than growing it",
+              code == 0 and z.namelist() == ["google-sheets-docs/SKILL.md"], str(z.namelist()))
 
     code, out = run(target)
     check("a second run is idempotent", code == 0 and "already points here" in out,

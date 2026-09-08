@@ -44,11 +44,12 @@ If the folder is not reachable, ask for it rather than telling the person to rec
 start over. Request the directory holding `gsheets.py` through this surface's folder-access
 tool - `mcp__cowork__request_cowork_directory` in Cowork, `mcp__ccd_directory__request_directory`
 in the Claude Code desktop app - passing the path, so what they see is that exact folder and
-one approval. Ask for that path; do not infer it from folder names. An ungranted folder lists
+one approval. Propose a path you have some reason to believe - one you were told, or one this
+file names where it does - rather than one read off a folder's name: an ungranted folder lists
 its subdirectories and not its files, so an empty one looks exactly like one holding
-`gsheets.py` - and in a session that grants without prompting, a guess costs nobody a click
-and is wrong just as often. Grants are per session, so this recurs and is not a sign something
-is broken. Only once they decline, or an install fails, use the Drive connector or the Sheets
+`gsheets.py`. Ask when you have nothing better. Where a session grants without prompting, the
+grant confirms nothing about whether you asked for the right place - check `gsheets.py` is
+there. Grants are per session, so this recurs and is not a sign something is broken. Only once they decline, or an install fails, use the Drive connector or the Sheets
 interface - and say which route you took: a slow path nobody was told about is how this stays
 broken for weeks.
 

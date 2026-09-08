@@ -7,6 +7,8 @@
 #   ./install --force [dir]     replace commands of the same name that are not ours
 #   ./install --claude-md [dir] also add a short section to ~/.claude/CLAUDE.md, so
 #                               sessions in other projects know these commands exist
+#   ./install --skill [dir]     also build google-sheets-docs.zip here: the skill with
+#                               this checkout's path in it, to upload to Cowork
 #
 # Symlinks, not copies: the wrappers resolve their own link chain, so an install
 # keeps following this checkout as it is edited, and `git pull` needs no reinstall.
@@ -25,11 +27,13 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)
 
 FORCE=no
 CLAUDE_MD=no
+SKILL=no
 TARGET=""
 for arg in "$@"; do
     case $arg in
         --force) FORCE=yes ;;
         --claude-md) CLAUDE_MD=yes ;;
+        --skill) SKILL=yes ;;
         -*) echo "install: unknown option $arg" >&2; exit 2 ;;
         *) TARGET=$arg ;;
     esac
@@ -150,6 +154,56 @@ else
     fi
 fi
 
+# --- the skill package (--skill) ---
+# Cowork reads no instruction file and grants a folder per session, so every task
+# starts not knowing where this checkout is. The published skill has to go looking;
+# a package built here already knows, and that is the difference between one
+# approval and a walk through somebody's home directory.
+SKILL_SRC=$HERE/skill/SKILL.md
+SKILL_ZIP=$PWD/google-sheets-docs.zip
+
+if [ "$SKILL" = yes ]; then
+    echo
+    [ -f "$SKILL_SRC" ] || { echo "install: $SKILL_SRC is missing" >&2; exit 1; }
+    PY=${GAPI_PYTHON:-${GTOOLS_PYTHON:-}}
+    if [ -z "$PY" ]; then
+        PY="$HERE/.venv/bin/python"
+        [ -x "$PY" ] || PY=python3
+    fi
+    stage=$(mktemp -d) || { echo "install: cannot create a temp directory" >&2; exit 1; }
+    mkdir -p "$stage/google-sheets-docs"
+    # Appended rather than substituted into the text: a build step that edits prose
+    # by pattern breaks silently the day the prose is reworded, and a wrong path is
+    # worse than none. The skill above still says to verify before trusting it.
+    {
+        cat "$SKILL_SRC"
+        printf '\n## Where it is on this machine\n\n'
+        printf '%s\n\n' "This package was built by \`install --skill\` from the checkout at:"
+        printf '    %s\n\n' "$HERE"
+        printf '%s\n' "Request that path rather than going looking for it, and check \`gsheets.py\` is"
+        printf '%s\n' "there before treating it as found: a checkout can move after a package was built"
+        printf '%s\n' "from it, and then this is a lead rather than an answer."
+    } > "$stage/google-sheets-docs/SKILL.md"
+    if ! "$PY" - "$stage" "$SKILL_ZIP" <<'PYZIP'
+import os, sys, zipfile
+stage, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for root, _, names in os.walk(stage):
+        for name in sorted(names):
+            full = os.path.join(root, name)
+            z.write(full, os.path.relpath(full, stage))
+PYZIP
+    then
+        rm -rf "$stage"
+        echo "install: could not write $SKILL_ZIP" >&2
+        exit 1
+    fi
+    rm -rf "$stage"
+    echo "built $SKILL_ZIP"
+    echo "      Upload it under Settings → Skills. It names this checkout, so a Cowork"
+    echo "      task asks to add $HERE and nothing else."
+fi
+
 # --- the global-instructions section (--claude-md) ---
 # Sessions in other projects have no reason to know these commands exist, and a
 # line in the agent's own instructions is what fixes that. This is the only
@@ -194,11 +248,18 @@ if [ "$CLAUDE_MD" = yes ]; then
         } >> "$MD"
         echo "added the section to $MD"
     fi
-elif [ -d "$MD_DIR" ] && ! md_present; then
+elif [ -d "$MD_DIR" ] && { ! md_present || [ ! -f "$SKILL_ZIP" ]; }; then
     # Only where there is a Claude home to speak of – without one this would be
-    # advice about a file the user does not have.
+    # advice about files the user does not have.
     echo
-    echo "NOTE: Sessions in other projects have no reason to know these exist."
-    echo "      ./install --claude-md adds a short section to $MD saying to"
-    echo "      prefer them over a browser or connector."
+    if ! md_present; then
+        echo "NOTE: Sessions in other projects have no reason to know these exist."
+        echo "      ./install --claude-md adds a short section to $MD saying to"
+        echo "      prefer them over a browser or connector."
+    fi
+    if [ ! -f "$SKILL_ZIP" ]; then
+        echo "NOTE: Cowork reads no instruction file, so it needs the skill instead."
+        echo "      ./install --skill builds that package with this path already in it,"
+        echo "      which is one approval per task rather than a search."
+    fi
 fi
