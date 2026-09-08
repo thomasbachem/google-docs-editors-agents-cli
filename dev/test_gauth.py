@@ -154,25 +154,61 @@ check("an unknown valued flag is refused too",
 check("everything after -- is positional",
       err is None and rest == ["t", "cmd", "--dryrun", "--tab=x"] and not flags, str(rest))
 
-# GTOOLS_RETRIES: a convenience knob must never take the tool down
+# GAPI_RETRIES: a convenience knob must never take the tool down
 def with_env(value):
-    """Run retry_count() with GTOOLS_RETRIES set (or unset for None)."""
+    """Run retry_count() with GAPI_RETRIES set (or unset for None)."""
     import io, contextlib
-    old = os.environ.get("GTOOLS_RETRIES")
+    old = os.environ.get("GAPI_RETRIES")
     if value is None:
-        os.environ.pop("GTOOLS_RETRIES", None)
+        os.environ.pop("GAPI_RETRIES", None)
     else:
-        os.environ["GTOOLS_RETRIES"] = value
+        os.environ["GAPI_RETRIES"] = value
     err = io.StringIO()
     try:
         with contextlib.redirect_stderr(err):
             return gauth.retry_count(), err.getvalue()
     finally:
         if old is None:
-            os.environ.pop("GTOOLS_RETRIES", None)
+            os.environ.pop("GAPI_RETRIES", None)
         else:
-            os.environ["GTOOLS_RETRIES"] = old
+            os.environ["GAPI_RETRIES"] = old
 
+
+
+# The retired GTOOLS_ spelling still has to reach the code, or a caller that set
+# it loses the setting with nothing said – a build that set the old name would
+# have stopped counting its calls.
+def with_both(new, old):
+    """retry_count() with GAPI_RETRIES=new and GTOOLS_RETRIES=old, either None."""
+    keep = {k: os.environ.get(k) for k in ("GAPI_RETRIES", "GTOOLS_RETRIES")}
+    for name, value in (("GAPI_RETRIES", new), ("GTOOLS_RETRIES", old)):
+        os.environ.pop(name, None)
+        if value is not None:
+            os.environ[name] = value
+    try:
+        return gauth.retry_count()
+    finally:
+        for name, value in keep.items():
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value
+
+
+check("the retired GTOOLS_ name is still honoured", with_both(None, "7") == 7)
+check("the new name wins where both are set", with_both("5", "7") == 5)
+
+# A message that named the new variable would send someone editing a line they
+# never wrote, so it has to name the one actually set.
+_, complaint = with_env("nope")
+check("a bad value names the variable that carries it", "GAPI_RETRIES=" in complaint, complaint)
+os.environ["GTOOLS_RETRIES"] = "nope"
+os.environ.pop("GAPI_RETRIES", None)
+import io, contextlib
+_err = io.StringIO()
+with contextlib.redirect_stderr(_err):
+    gauth.retry_count()
+os.environ.pop("GTOOLS_RETRIES", None)
+check("under the old name, that name", "GTOOLS_RETRIES=" in _err.getvalue(), _err.getvalue())
 
 n, err = with_env(None)
 check("unset means the default", n == gauth.RETRY_DEFAULT == 3 and not err, f"{n} {err!r}")
@@ -235,20 +271,20 @@ check("the limit is named for the message",
 
 
 def with_quota_env(value):
-    old = os.environ.get("GTOOLS_QUOTA_WAIT")
+    old = os.environ.get("GAPI_QUOTA_WAIT")
     if value is None:
-        os.environ.pop("GTOOLS_QUOTA_WAIT", None)
+        os.environ.pop("GAPI_QUOTA_WAIT", None)
     else:
-        os.environ["GTOOLS_QUOTA_WAIT"] = value
+        os.environ["GAPI_QUOTA_WAIT"] = value
     err = io.StringIO()
     try:
         with contextlib.redirect_stderr(err):
             return gauth.quota_waits(), err.getvalue()
     finally:
         if old is None:
-            os.environ.pop("GTOOLS_QUOTA_WAIT", None)
+            os.environ.pop("GAPI_QUOTA_WAIT", None)
         else:
-            os.environ["GTOOLS_QUOTA_WAIT"] = old
+            os.environ["GAPI_QUOTA_WAIT"] = old
 
 
 waits, err = with_quota_env(None)
@@ -352,18 +388,18 @@ check("sizes are named at the scale the cap is",
 # --- collecting across processes, which is the only way a peak means anything
 
 def with_stats_env(value):
-    old = os.environ.get("GTOOLS_STATS")
+    old = os.environ.get("GAPI_STATS")
     if value is None:
-        os.environ.pop("GTOOLS_STATS", None)
+        os.environ.pop("GAPI_STATS", None)
     else:
-        os.environ["GTOOLS_STATS"] = value
+        os.environ["GAPI_STATS"] = value
     try:
         return gauth.stats_target()
     finally:
         if old is None:
-            os.environ.pop("GTOOLS_STATS", None)
+            os.environ.pop("GAPI_STATS", None)
         else:
-            os.environ["GTOOLS_STATS"] = old
+            os.environ["GAPI_STATS"] = old
 
 
 check("stats are off unless asked for",

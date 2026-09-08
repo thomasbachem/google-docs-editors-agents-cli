@@ -9,9 +9,8 @@ while [ -L "$SELF" ]; do
     esac
 done
 HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)
-if [ -n "${GTOOLS_PYTHON:-}" ]; then
-    PY=$GTOOLS_PYTHON
-else
+PY=${GAPI_PYTHON:-${GTOOLS_PYTHON:-}}
+if [ -z "$PY" ]; then
     PY="$HERE/../.venv/bin/python"
     [ -x "$PY" ] || PY=python3
 fi

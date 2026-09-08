@@ -34,7 +34,7 @@ def run(*args, claude_home=None, env_extra=None):
 
 
 print("=== install ===\n")
-box = tempfile.mkdtemp(prefix="gtools-install-")
+box = tempfile.mkdtemp(prefix="gapi-install-")
 try:
     target = os.path.join(box, "bin")          # deliberately absent
     code, out = run(target)
@@ -104,7 +104,7 @@ try:
                 'echo "ModuleNotFoundError: No module named \'googleapiclient\'" >&2\n'
                 'exit 1\n')
     os.chmod(stub, 0o755)
-    code, out = run(target, env_extra={"GTOOLS_PYTHON": stub})
+    code, out = run(target, env_extra={"GAPI_PYTHON": stub})
     check("a crashing tool is not reported as verified",
           code != 0 and "verified:" not in out, f"exit {code}")
     check("and the cause is named, not the traceback's first line",
@@ -126,7 +126,7 @@ try:
         'echo "  warnings.warn(message, FutureWarning)" >&2\n'
         'echo "tester@example.com"\n'
         'echo "project: p-1"\n'))
-    code, out = run(target, env_extra={"GTOOLS_PYTHON": noisy})
+    code, out = run(target, env_extra={"GAPI_PYTHON": noisy})
     verified = next((l for l in out.splitlines() if l.startswith("verified:")), "")
     check("a warning on stderr does not become the verified answer",
           "tester@example.com" in verified and "FutureWarning" not in verified,
@@ -138,7 +138,7 @@ try:
         'echo "/x/api_core.py:242: FutureWarning: You are using an old Python." >&2\n'
         'echo "no token.json – run auth.py once to authorize" >&2\n'
         'exit 1\n'))
-    code, out = run(target, env_extra={"GTOOLS_PYTHON": refusing})
+    code, out = run(target, env_extra={"GAPI_PYTHON": refusing})
     verified = next((l for l in out.splitlines() if l.startswith("verified:")), "")
     check("with no stdout the tool's own refusal is shown, not the warning",
           "no token.json" in verified and "FutureWarning" not in verified,

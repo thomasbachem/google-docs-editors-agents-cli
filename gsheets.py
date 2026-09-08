@@ -228,16 +228,16 @@ A 429 or a transient 5xx needs no retry code of your own: every call here asks
 the client library to back off and retry. Only `gsheets.api()` callers have to
 request it themselves, with execute(num_retries=3) – its default is no retry,
 which is how a one-off 503 becomes a write that simply did not happen.
-GTOOLS_RETRIES sets the number of attempts (default 3, 0 disables, capped at
+GAPI_RETRIES sets the number of attempts (default 3, 0 disables, capped at
 10). The backoff is random and doubles each time, so 3 costs at most ~14s.
 A 429 that names a PER-MINUTE quota is a different failure and gets a different
 answer: fixed, announced pauses that outlast the sliding 60-second window
-(GTOOLS_QUOTA_WAIT, default "20,40"; 0 turns the waiting off). No jittered
+(GAPI_QUOTA_WAIT, default "20,40"; 0 turns the waiting off). No jittered
 backoff setting covers both – see REFERENCE.md.
 
-GTOOLS_STATS=1 prints what a run spent, per quota, on stderr as it exits:
+GAPI_STATS=1 prints what a run spent, per quota, on stderr as it exits:
 
-    gtools: 55 API call(s) – sheets read 30 (peak 24/60s), sheets write 25
+    gapi: 55 API call(s) – sheets read 30 (peak 24/60s), sheets write 25
     (peak 21/60s); 512 KB sent, largest 414 KB
 
 The peak is the count in the busiest 60 seconds, which is the only figure the
@@ -245,7 +245,7 @@ limit compares against – a run making 90 calls over five minutes is nowhere
 near it. The largest single payload is the one that decides whether a bundle
 needs splitting, against a cap around 2 MB.
 
-Set GTOOLS_STATS to a PATH instead and every process appends there, with all of
+Set GAPI_STATS to a PATH instead and every process appends there, with all of
 them reading the whole file. That is the only form that means anything for a
 build which fans out: eleven generators finishing inside 45 seconds each see a
 fraction of one window, and it is their sum that trips the limit. The file is

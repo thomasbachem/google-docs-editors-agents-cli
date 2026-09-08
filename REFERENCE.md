@@ -20,10 +20,10 @@ surfaces:
   under any payload limit, and one call against the quota. Splitting them into
   bundles buys nothing.
 
-`GTOOLS_STATS=1` makes a run say what it spent, on stderr as it exits:
+`GAPI_STATS=1` makes a run say what it spent, on stderr as it exits:
 
 ```
-gtools: 55 API call(s) – sheets read 30 (peak 24/60s), sheets write 25 (peak 21/60s); 512 KB sent, largest 414 KB
+gapi: 55 API call(s) – sheets read 30 (peak 24/60s), sheets write 25 (peak 21/60s); 512 KB sent, largest 414 KB
 ```
 
 The **peak** is the one to read. It counts the busiest 60 seconds, which is what
@@ -42,16 +42,16 @@ after a run that hit 429s the real usage is a little above what it reports.
 
 `Calls` lives in one process, so a build that fans out defeats a per-process
 peak: eleven generators finishing inside 45 seconds each see a fraction of one
-window, and it is their sum Google meters. Set `GTOOLS_STATS` to a **path**
+window, and it is their sum Google meters. Set `GAPI_STATS` to a **path**
 rather than `1`, and every process appends there while all of them read the
 whole file:
 
 ```sh
-GTOOLS_STATS=/tmp/build-calls.jsonl ./bauen.py
+GAPI_STATS=/tmp/build-calls.jsonl ./bauen.py
 ```
 
 ```
-gtools: 55 API call(s) in 11 processes – sheets read 30 (peak 24/60s), …
+gapi: 55 API call(s) in 11 processes – sheets read 30 (peak 24/60s), …
 ```
 
 That also survives a runner which swallows stderr, since the file outlives the
@@ -91,7 +91,7 @@ A runner that swallows stderr can print the collected summary itself once the bu
 print(gauth.Calls("/tmp/build-calls.jsonl").report())
 ```
 
-Printing it yourself in a process that also has `GTOOLS_STATS` set gets you the line twice — the
+Printing it yourself in a process that also has `GAPI_STATS` set gets you the line twice — the
 import registered an exit hook. Drop that one:
 
 ```python
@@ -349,12 +349,12 @@ anything else – and a second one inside the mount would collide with the first
 mount and name it:
 
 ```sh
-python3 -m venv ~/.venvs/gtools
-~/.venvs/gtools/bin/python -m pip install google-api-python-client google-auth-oauthlib
-export GTOOLS_PYTHON=~/.venvs/gtools/bin/python
+python3 -m venv ~/.venvs/gsheets
+~/.venvs/gsheets/bin/python -m pip install google-api-python-client google-auth-oauthlib
+export GAPI_PYTHON=~/.venvs/gsheets/bin/python
 ```
 
-`GTOOLS_PYTHON` is used exactly as given, so a wrong one fails loudly rather than falling back
+`GAPI_PYTHON` is used exactly as given, so a wrong one fails loudly rather than falling back
 behind your back. Without it the wrappers try `python3` on `PATH`, which needs those same two
 packages and nothing more – but that install fails wherever PEP 668 marks the system Python
 externally managed: Debian 12 and up, Ubuntu 23.04 and up, Fedora, Homebrew. Older images still
@@ -370,15 +370,19 @@ silences it either way.
 
 ## Environment
 
-`GTOOLS_PYTHON` picks the interpreter the `gsheets`/`gdocs` wrappers exec, overriding both the
+`GAPI_PYTHON` picks the interpreter the `gsheets`/`gdocs` wrappers exec, overriding both the
 bundled `.venv` and the `python3` fallback – the section above is what it is for.
 
-`GTOOLS_RETRIES` sets how many times a transient failure (429, 5xx) is retried: default 3, `0`
-disables, capped at 10. `GTOOLS_QUOTA_WAIT` sets the fixed pauses used to sit out a per-minute
+`GAPI_RETRIES` sets how many times a transient failure (429, 5xx) is retried: default 3, `0`
+disables, capped at 10. `GAPI_QUOTA_WAIT` sets the fixed pauses used to sit out a per-minute
 quota: default `20,40`, `0` disables. An unusable value warns and falls back rather than failing
-the command. `GTOOLS_STATS` prints the call summary described under **Quota, measured**: off unless
+the command. `GAPI_STATS` prints the call summary described under **Quota, measured**: off unless
 set, `1`/`on`/`true`/`yes` counts within the one process, and any other value is taken as a path
 every process appends to.
+
+Each of the four was spelled `GTOOLS_…` until the project outgrew the directory it was named
+after. That spelling is still read, so nothing set before the rename stops working; where both
+are set the `GAPI_` one wins, and a complaint names whichever one carries the bad value.
 
 The backoff sleeps `rand() * 2**n` per attempt, so a run lands anywhere below its ceiling – and
 the ceiling badly overstates it. Simulated over 200,000 runs: at 3 the total averages ~7s against
@@ -390,7 +394,7 @@ So these retries are for a transient 429 or 5xx, and no setting also makes them 
 sliding 60-second window. The jitter is there to spread contending clients apart, and a limit of
 60 calls per minute per *user* has no contention to spread: it is a clock, not a crowd.
 
-`GTOOLS_QUOTA_WAIT` is the second policy, for that clock. A 429 whose body names a per-minute
+`GAPI_QUOTA_WAIT` is the second policy, for that clock. A 429 whose body names a per-minute
 quota is sat out with **fixed** pauses that sum past the window – default `20,40`, so two waits
 rather than the seven retries it would otherwise take. Each one is announced on stderr, because a
 silent minute reads as a hang:

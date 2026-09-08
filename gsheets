@@ -13,11 +13,10 @@ while [ -L "$SELF" ]; do
 done
 HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)
 # A copy mounted from another OS carries a .venv full of foreign binaries, so fall
-# back to python3 on PATH rather than dying. GTOOLS_PYTHON forces a choice and is
+# back to python3 on PATH rather than dying. GAPI_PYTHON forces a choice and is
 # used as given, so a wrong one fails loudly instead of falling back.
-if [ -n "${GTOOLS_PYTHON:-}" ]; then
-    PY=$GTOOLS_PYTHON
-else
+PY=${GAPI_PYTHON:-${GTOOLS_PYTHON:-}}
+if [ -z "$PY" ]; then
     PY="$HERE/.venv/bin/python"
     [ -x "$PY" ] || PY=python3
 fi

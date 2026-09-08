@@ -65,10 +65,10 @@ first and style afterwards: styles shift no indices, so one `index` read still
 covers every range.
 
 Transient failures (429, 5xx) are retried with backoff on every call;
-GTOOLS_RETRIES sets how many attempts (default 3, 0 disables, capped at 10).
+GAPI_RETRIES sets how many attempts (default 3, 0 disables, capped at 10).
 A 429 naming a per-minute quota is instead sat out with fixed announced pauses
-(GTOOLS_QUOTA_WAIT, default "20,40"; 0 turns it off).
-GTOOLS_STATS=1 prints what a run spent against those quotas as it exits, per
+(GAPI_QUOTA_WAIT, default "20,40"; 0 turns it off).
+GAPI_STATS=1 prints what a run spent against those quotas as it exits, per
 API and split into reads and writes, with the count in its busiest 60 seconds –
 the only figure a per-minute limit compares against – plus the payload sent.
 Set it to a PATH and every process appends there instead, which is what makes

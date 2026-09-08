@@ -31,6 +31,22 @@ SECRETS = os.path.join(HERE, "client_secret.json")
 RETRY_DEFAULT = 3
 RETRY_CEILING = 10
 
+# The prefix was GTOOLS_ while this lived in a directory of that name, which is
+# gone – and a name pointing at a place that no longer exists sends a reader
+# looking for it. The old spelling still works, so a caller that set it does not
+# silently lose the setting, and any message it provokes names what it set.
+PREFIX = "GAPI_"
+LEGACY_PREFIX = "GTOOLS_"
+
+
+def env(name, default=None):
+    """A setting and the variable it came from, new spelling winning."""
+    for prefix in (PREFIX, LEGACY_PREFIX):
+        raw = os.environ.get(prefix + name)
+        if raw is not None:
+            return raw, prefix + name
+    return default, PREFIX + name
+
 
 def retry_count():
     """How hard to retry transient failures, overridable per run.
@@ -40,21 +56,21 @@ def retry_count():
     simply did not happen. A bad value here must not take the tool down over a
     convenience knob, so every rejection falls back and says so.
     """
-    raw = os.environ.get("GTOOLS_RETRIES")
+    raw, var = env("RETRIES")
     if raw is None:
         return RETRY_DEFAULT
     try:
         n = int(raw)
     except ValueError:
-        print(f"GTOOLS_RETRIES={raw!r} is not a number – using {RETRY_DEFAULT}",
+        print(f"{var}={raw!r} is not a number – using {RETRY_DEFAULT}",
               file=sys.stderr)
         return RETRY_DEFAULT
     if n < 0:
         # range(num_retries + 1) would be empty, so the request never runs at all
-        print(f"GTOOLS_RETRIES={n} is negative – using 0", file=sys.stderr)
+        print(f"{var}={n} is negative – using 0", file=sys.stderr)
         return 0
     if n > RETRY_CEILING:
-        print(f"GTOOLS_RETRIES={n} exceeds the {RETRY_CEILING} cap – using "
+        print(f"{var}={n} exceeds the {RETRY_CEILING} cap – using "
               f"{RETRY_CEILING}", file=sys.stderr)
         return RETRY_CEILING
     return n
@@ -72,23 +88,24 @@ QUOTA_WAITS_DEFAULT = "20,40"
 
 
 def quota_waits():
-    """Pauses used to sit out a per-minute quota, from GTOOLS_QUOTA_WAIT.
+    """Pauses used to sit out a per-minute quota, from GAPI_QUOTA_WAIT.
 
     Empty or 0 turns the waiting off – a person at a terminal usually wants the
     error now, where a build script wants the write to land.
     """
-    raw = os.environ.get("GTOOLS_QUOTA_WAIT", QUOTA_WAITS_DEFAULT).strip()
+    raw, var = env("QUOTA_WAIT", QUOTA_WAITS_DEFAULT)
+    raw = raw.strip()
     fallback = tuple(int(p) for p in QUOTA_WAITS_DEFAULT.split(","))
     if raw in ("", "0"):
         return ()
     try:
         waits = tuple(int(p) for p in raw.split(","))
     except ValueError:
-        print(f"GTOOLS_QUOTA_WAIT={raw!r} is not a comma-separated list of seconds – "
+        print(f"{var}={raw!r} is not a comma-separated list of seconds – "
               f"using {QUOTA_WAITS_DEFAULT}", file=sys.stderr)
         return fallback
     if any(w < 0 for w in waits):
-        print(f"GTOOLS_QUOTA_WAIT={raw!r} has a negative wait – using "
+        print(f"{var}={raw!r} has a negative wait – using "
               f"{QUOTA_WAITS_DEFAULT}", file=sys.stderr)
         return fallback
     return waits
@@ -118,7 +135,7 @@ def quota_limit_name(err):
 
 
 def stats_target():
-    """What GTOOLS_STATS asks for, as (summary wanted, file to collect into).
+    """What GAPI_STATS asks for, as (summary wanted, file to collect into).
 
     A boolean word keeps the count inside one process. Anything else names a
     file every process appends to, which is the only way the peak means
@@ -128,7 +145,8 @@ def stats_target():
     between runs – it is appended to, never truncated here, since a process
     that truncated it would take its siblings' entries with it.
     """
-    raw = os.environ.get("GTOOLS_STATS", "").strip()
+    raw, _ = env("STATS", "")
+    raw = raw.strip()
     if raw.lower() in ("", "0", "off", "false"):
         return False, None
     if raw.lower() in ("1", "on", "true", "yes"):
@@ -212,7 +230,7 @@ class Calls:
             self.handle.flush()
         except OSError as err:
             self.broken = True
-            print(f"GTOOLS_STATS={self.path}: cannot collect ({err}) – counting this "
+            print(f"{env('STATS')[1]}={self.path}: cannot collect ({err}) – counting this "
                   f"process only", file=sys.stderr)
 
     def records(self):
@@ -265,7 +283,7 @@ class Calls:
             for (api, kind), n in sorted(self.counts(records).items()))
         workers = {call.pid for call in records}
         where = f" in {len(workers)} processes" if len(workers) > 1 else ""
-        line = f"gtools: {len(records)} API call(s){where} – {spent}"
+        line = f"gapi: {len(records)} API call(s){where} – {spent}"
         sent = sum(call.size for call in records)
         if sent:
             # The payload cap sits around 2 MB, so the largest single one is
@@ -279,7 +297,7 @@ calls = Calls(STATS_FILE)
 
 
 def print_stats():
-    print(calls.report() or "gtools: no API calls", file=sys.stderr)
+    print(calls.report() or "gapi: no API calls", file=sys.stderr)
 
 
 if STATS:
