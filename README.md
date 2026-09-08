@@ -1,9 +1,9 @@
 # Google Sheets+Docs from the Command Line, for Agents
 
-An agent told to edit a spreadsheet usually ends up driving the browser: pasting TSV through the
-clipboard, aiming at cells through the Name Box, expanding a collapsed group first so the write does
-not land in the wrong row. Those failures belong to the interface, not the task, and none exists
-through the API.
+An agent told to edit a spreadsheet uses whatever it has, and what it has is usually the browser:
+pasting TSV through the clipboard, aiming at cells through the Name Box, expanding a collapsed group
+first so the write does not land in the wrong row. Those failures belong to the interface, not the
+task, and none of them exists through the API. These are the API.
 
 - `gsheets` – create, read and edit spreadsheets
 - `gdocs` – create, read and edit documents
@@ -24,6 +24,32 @@ locale parsing, link normalization, index shift. Both are also Python modules, t
 a script making dozens of calls: the commands are those methods with argument parsing around them.
 `REFERENCE.md` holds that API, the measurements these claims stand on, the environment variables and
 running this over a mount; `AGENTS.md` is for working on the tool rather than with it.
+
+## Why not the connector
+
+A Drive connector exposing `spreadsheets.batchUpdate` reaches the same API these commands do and
+asks for none of the setup below. ChatGPT's does: measured against a live sheet on 2026-09-08, a
+single `batch_update_spreadsheet` call set a header bold on a fill, froze the top row, wrote a
+strict validation dropdown and applied a currency format – in place, without touching the values.
+Where that is what you have and the file is your own, use it.
+
+Claude's Drive connector is a different shape: it reads file content and creates files, and its
+`update_file` changes a title and a parent. No content write exists, so an edit is not available by
+that route – which is why the skill below installs the commands rather than falling back to it.
+
+What no connector gives you is any of this, and it is why the commands exist:
+
+- **A token that cannot reach Drive.** A connector is authorized against your Drive as a whole.
+  These hold no Drive scope at all, as above, so the worst a confused agent manages is changing a
+  file someone named.
+- **A shell wherever you are.** A connector runs inside one vendor's product. A command runs in CI,
+  in cron, in a Makefile, and under whichever agent you are using this week.
+- **A script rather than a conversation.** Dozens of coordinated calls belong in a Python loop, not
+  in a context window – `REFERENCE.md` has the module API.
+- **Something you can read first.** `--dry-run` prints the request and sends nothing, the code is
+  here, and a version you pinned stays the version you pinned.
+
+Where both exist they compose: the connector's search finds the file, these edit it.
 
 ## Setup
 
@@ -137,14 +163,16 @@ instead – see **Installing the skill**.
 ## Driving it from Claude
 
 Three things decide whether a surface can run these: **a shell**, **network to `googleapis.com`**,
-and **the token**.
+and **the token**. Anything holding all three can, which is what a command-line tool means – but
+the surfaces below are the ones it has actually been used on, so they are the ones described here.
 
 - **Claude Code** – and anything else with a shell, a CI job or a cron entry – has all three the
   moment `install` has run. Probe with `command -v gsheets` rather than hunting for a checkout.
 - **Cowork** has a shell and a network, so the token is the only open question. Mount or upload it
   and it works.
-- **The claude.ai app** cannot run a command at all, and wants the Google Drive connector instead.
-  A skill should try the command, fall back to the connector, and say which it used.
+- **The claude.ai app** cannot run a command at all. Its Drive connector reads a file and renames
+  it but writes no cell, so an edit there has to go through the Sheets interface – **Why not the
+  connector** has the measurements.
 
 ## Installing the skill
 
@@ -157,11 +185,11 @@ it reaches Cowork and Claude Code alike. Zipping the directory by hand works too
 and then every task begins by searching for the checkout before it can ask for it. Nothing tracks
 the checkout for you, so a change means building and uploading again.
 
-Its name and description then sit in the session's context and the body loads only when
-a task looks like spreadsheet work. The skill probes for the commands, installs them where the
-sandbox home starts empty and the checkout is connected – which is every new Cowork task – and
-falls back to the Drive connector when neither holds, saying which route it took so a silent slow
-path is never mistaken for a fast one.
+Its name and description then sit in the session's context, and the body loads only when
+a task looks like spreadsheet work. The skill probes for the commands and installs them where the
+sandbox home starts empty and the checkout is connected – which is every new Cowork task. Where
+neither holds it falls back to the Sheets interface, Claude's Drive connector writing no cell, and
+says which route it took, so a detour is never mistaken for the fast path.
 
 For a sentence rather than a skill, *Settings → Cowork → Global instructions* takes standing text
 that applies to every session.
