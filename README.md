@@ -185,11 +185,11 @@ it reaches Cowork and Claude Code alike. Zipping the directory by hand works too
 and then every task begins by searching for the checkout before it can ask for it. Nothing tracks
 the checkout for you, so a change means building and uploading again.
 
-Its name and description then sit in the session's context, and the body loads only when
-a task looks like spreadsheet work. The skill probes for the commands and installs them where the
-sandbox home starts empty and the checkout is connected – which is every new Cowork task. Where
-neither holds it falls back to the Sheets interface, Claude's Drive connector writing no cell, and
-says which route it took, so a detour is never mistaken for the fast path.
+Its name and description then sit in the session's context, and the body loads only when a task
+looks like spreadsheet work. The skill probes for the commands and installs them where the sandbox
+home starts empty and the checkout is connected – which is every new Cowork task. Where neither
+holds it falls back to the Sheets interface, Claude's Drive connector writing no cell, and says
+which route it took, so a detour is never mistaken for the fast path.
 
 For a sentence rather than a skill, *Settings → Cowork → Global instructions* takes standing text
 that applies to every session.
