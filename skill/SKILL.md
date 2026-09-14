@@ -1,14 +1,14 @@
 ---
 name: google-sheets-docs
-description: "Use whenever a task involves creating, reading or editing a Google Sheet or Google Doc - a new sheet or document, cells, ranges, tabs, formulas, formatting, row groups. Two commands, gsheets and gdocs, drive the official Sheets and Docs APIs directly: faster than the browser, and able to edit contents the Drive connector cannot. Use them too when an edit by another route has stalled."
+description: "Use whenever a task involves creating, reading or editing a Google Sheet or Google Doc - a new sheet or document, cells, ranges, tabs, formulas, formatting, row groups, comments. Two commands, gsheets and gdocs, drive the official Sheets and Docs APIs directly: faster than the browser, and able to edit contents the Drive connector cannot. Use them too when an edit by another route has stalled."
 ---
 
 # Google Sheets and Docs through their APIs
 
 Two commands, `gsheets` and `gdocs`, talk to the official APIs. They read several ranges
-in one call and edit cells, tabs, formatting and row groups directly. Neither holds a
-Drive scope: they can change the contents of a file you name and nothing else - no
-deleting, moving, renaming or sharing, and no reaching a file you were not given.
+in one call and edit cells, tabs, formatting and row groups directly, and `gsheets` reads
+and answers comment threads. Its token reaches the whole Drive, for those comments - no
+command deletes, moves, renames or shares a file, and none should be improvised.
 
 ## First, is it here?
 
@@ -96,6 +96,12 @@ In Sheets:
 - **`objects` sees what `get` and `cells` cannot** - conditional formats, row groups,
   charts, merges - and counts duplicates, which is how a job run twice stacks rules
   invisibly until the sheet crawls.
+- **`comments` lists the open threads with the cell each is on**; `reply`, `resolve` and
+  `reopen` take the id it prints. Trust a cell printed bare; one followed by a remark in
+  brackets is in doubt, and a thread whose row or column was deleted says so rather than
+  pointing at A1. Nothing creates a comment on a cell - Google does not show one made that
+  way - so reply to a thread already there. A comment moves only with its cell - a
+  `cutPaste` through `batch` carries both.
 
 In Docs:
 

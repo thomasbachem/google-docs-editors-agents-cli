@@ -2,8 +2,8 @@
 """Drive gsheets.py's command branches against a fake Sheets API.
 
 No network and no Google account: the token is a throwaway file, so this also
-covers `create`, which would otherwise leave an undeletable spreadsheet behind
-(the tool holds no Drive scope).
+covers `create`, which would otherwise leave a spreadsheet behind that no command
+here deletes.
 """
 
 import contextlib
@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(HERE, os.pardir))
 from googleapiclient.errors import HttpError  # noqa: E402
 
 import gauth  # noqa: E402
+import gcomments  # noqa: E402
 import gsheets  # noqa: E402
 
 calls = []
@@ -25,8 +26,9 @@ fails = []
 retries = []
 sent = []
 
-# run() swaps gsheets.api for a fake, so the real one is kept to probe it
+# run() swaps gsheets.api and gcomments.drive_api for fakes, so the real ones are kept to probe them
 REAL_API = gsheets.api
+REAL_DRIVE_API = gcomments.drive_api
 
 
 class Exec:
@@ -163,15 +165,20 @@ def use_token(email="tester@example.com", source="id_token"):
 
 
 LAST_EXIT = None
+# The Drive service run() hands out – None until the comment tests set one, so a
+# Sheets command that reached for Drive fails loudly instead of passing quietly.
+DRIVE = [None]
 
 
-def run(argv, locale="de_DE"):
+def run(argv, locale="de_DE", sheets=None):
     global LAST_EXIT
     LAST_EXIT = None
     calls.clear()
     retries.clear()
     sent.clear()
-    gsheets.api = lambda: Sheets(locale)
+    gsheets.api = lambda: sheets or Sheets(locale)
+    gcomments.drive_api = lambda: DRIVE[0] or (_ for _ in ()).throw(
+        AssertionError("a Sheets command built the Drive service"))
     out, err = io.StringIO(), io.StringIO()
     sys.argv = argv
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -858,6 +865,448 @@ run(["gsheets", "cells", "ID", "A!A1", "--fields=hyperlink"])
 check("--fields still works on cells", LAST_EXIT is None, str(LAST_EXIT)[:60])
 run(["gsheets", "insert-rows", "ID", "Tab1", "5", "--count=2"])
 check("--count still works on insert-rows", LAST_EXIT is None, str(LAST_EXIT)[:60])
+
+# --- comments -------------------------------------------------------------------
+# Drive's anchor names no cell, so the cell comes off two exports. The fixtures
+# below are shaped like the measured ones: an orphan the XLSX export puts on A1
+# and the ODS export keeps elsewhere, a resolved A1 thread the ODS export omits,
+# and two threads created in the same second.
+print("\n--- comments ---")
+import zipfile  # noqa: E402
+from xml.sax.saxutils import escape as xml_escape  # noqa: E402
+
+MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+THREAD_NS = "http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"
+
+
+def xlsx_export(tabs):
+    """[(tab, [(cell, dT, text, done, is_reply)])] as the zip `comments` reads."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        sheets, rels = [], []
+        for i, (tab, threads) in enumerate(tabs, 1):
+            sheets.append(f'<sheet name="{xml_escape(tab, {chr(34): "&quot;"})}" '
+                          f'sheetId="{i}" r:id="rId{i}"/>')
+            rels.append(f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/'
+                        f'officeDocument/2006/relationships/worksheet" '
+                        f'Target="worksheets/sheet{i}.xml"/>')
+            z.writestr(f"xl/worksheets/sheet{i}.xml", f'<worksheet xmlns="{MAIN_NS}"/>')
+            if not threads:
+                continue
+            # Tab 2 names its part absolutely, which the package format allows
+            target = (f"/xl/threadedComments/threadedComment{i}.xml" if i == 2
+                      else f"../threadedComments/threadedComment{i}.xml")
+            z.writestr(f"xl/worksheets/_rels/sheet{i}.xml.rels",
+                       f'<Relationships xmlns="{RELS_NS}"><Relationship Id="rId1" '
+                       f'Type="http://schemas.microsoft.com/office/2017/10/relationships/'
+                       f'threadedComment" Target="{target}"/></Relationships>')
+            items = "".join(
+                f'<x18tc:threadedComment ref="{cell}" dT="{dt}" id="{{g{i}-{n}}}"'
+                f'{" parentId=" + chr(34) + "{p}" + chr(34) if reply else ""} done="{int(done)}">'
+                f'<x18tc:text xml:space="preserve">{xml_escape(text)}</x18tc:text>'
+                f'</x18tc:threadedComment>'
+                for n, (cell, dt, text, done, reply) in enumerate(threads))
+            z.writestr(f"xl/threadedComments/threadedComment{i}.xml",
+                       f'<x18tc:ThreadedComments xmlns="{MAIN_NS}" xmlns:x18tc="{THREAD_NS}">'
+                       f'{items}</x18tc:ThreadedComments>')
+        z.writestr("xl/workbook.xml",
+                   f'<workbook xmlns="{MAIN_NS}" xmlns:r="http://schemas.openxmlformats.org/'
+                   f'officeDocument/2006/relationships"><sheets>{"".join(sheets)}</sheets>'
+                   f'</workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   f'<Relationships xmlns="{RELS_NS}">{"".join(rels)}</Relationships>')
+    return buf.getvalue()
+
+
+def ods_export(tables):
+    """[(tab, [(row, col, [lines])])], 1-based, with the repeats Google writes."""
+    body = []
+    for tab, notes in tables:
+        rows = []
+        at = {(r, c): lines for r, c, lines in notes}
+        last = max((r for r, _, _ in notes), default=0)
+        row = 1
+        while row <= last:
+            if not any(r == row for r, _ in at):
+                span = 1
+                while row + span <= last and not any(r == row + span for r, _ in at):
+                    span += 1
+                rows.append(f'<table:table-row table:number-rows-repeated="{span}">'
+                            '<table:table-cell table:number-columns-repeated="26"/>'
+                            '</table:table-row>')
+                row += span
+                continue
+            cells, col = [], 1
+            for c in sorted(c for r, c in at if r == row):
+                if c > col:
+                    # a merged cell's covered neighbour counts as a column like any other
+                    cells.append('<table:covered-table-cell/>')
+                    if c - col > 1:
+                        cells.append('<table:table-cell '
+                                     f'table:number-columns-repeated="{c - col - 1}"/>')
+                paras = "".join(f"<text:p>{xml_escape(line)}</text:p>" for line in at[(row, c)])
+                cells.append("<table:table-cell><office:annotation><dc:date>2026-09-14T00:00:00"
+                             f"</dc:date>{paras}</office:annotation>"
+                             "<text:p>v</text:p></table:table-cell>")
+                col = c + 1
+            rows.append(f"<table:table-row>{''.join(cells)}</table:table-row>")
+            row += 1
+        body.append(f'<table:table table:name="{xml_escape(tab)}">'
+                    f'<table:table-row-group>{"".join(rows)}</table:table-row-group></table:table>')
+    content = ('<office:document-content '
+               'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+               'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+               'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+               'xmlns:dc="http://purl.org/dc/elements/1.1/"><office:body><office:spreadsheet>'
+               f'{"".join(body)}</office:spreadsheet></office:body></office:document-content>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("content.xml", content)
+    return buf.getvalue()
+
+
+ANCHOR = '{"type":"workbook-range","uid":0,"range":"266433416"}'
+
+
+def comment(cid, created, text, **extra):
+    return {"id": cid, "anchor": ANCHOR, "content": text, "createdTime": created,
+            "modifiedTime": created, "author": {"displayName": "Tom"}, **extra}
+
+
+COMMENTS = [
+    comment("open", "2026-09-07T14:33:34.800Z", "Versicherungen?",
+            quotedFileContent={"value": "&#216; Honorar"}),
+    comment("orphan", "2026-09-07T14:35:00.100Z", "Zeile weg",
+            quotedFileContent={"value": "2: comment B5"}),
+    comment("resolvedA1", "2026-09-07T14:36:00.000Z", "Oben", resolved=True),
+    comment("done", "2026-09-07T14:37:00.000Z", "Zu hoch", resolved=True, replies=[
+        {"id": "r1", "content": "Stimmt", "createdTime": "2026-09-08T09:00:00.000Z",
+         "author": {"displayName": "Kai"}},
+        {"id": "r2", "content": "", "action": "resolve", "createdTime": "2026-09-08T09:01:00.000Z",
+         "author": {"displayName": "Kai"}},
+        {"id": "r3", "content": "gelöscht", "deleted": True,
+         "createdTime": "2026-09-08T09:02:00.000Z", "author": {"displayName": "Kai"}}]),
+    comment("realA1", "2026-09-07T14:38:00.000Z", "Kopfzeile"),
+    {"id": "file", "content": "Ohne Zelle", "createdTime": "2026-09-07T14:39:00.000Z",
+     "author": {"displayName": "Tom"}},
+    comment("missing", "2026-09-07T14:40:00.000Z", "Nicht exportiert"),
+    comment("twinA", "2026-09-07T14:41:00.100Z", "Checken"),
+    comment("twinB", "2026-09-07T14:41:00.900Z", "Nochmal\nzwei Zeilen"),
+]
+XLSX_DATA = xlsx_export([
+    ("Annahmen", [("B7", "2026-09-07T14:33:34.00", "Versicherungen?", False, False),
+                  ("A1", "2026-09-07T14:35:00.00", "Zeile weg", False, False),
+                  ("A1", "2026-09-07T14:36:00.00", "Oben", True, False),
+                  ("D41", "2026-09-07T14:37:00.00", "Zu hoch", True, False),
+                  ("D41", "2026-09-08T09:00:00.00", "Stimmt", False, True),
+                  ("A1", "2026-09-07T14:38:00.00", "Kopfzeile", False, False),
+                  # the export lists a status change as a localized reply – measured – and
+                  # one sharing a second with a thread must never be taken for it
+                  ("D41", "2026-09-07T14:40:00.00", "Als geklärt gekennzeichnet", False, True)]),
+    ("Personal Plan", [("B40", "2026-09-07T14:41:00.00", "Checken", False, False),
+                       ("B41", "2026-09-07T14:41:00.00", "Nochmal\nzwei Zeilen", False, False)]),
+])
+ODS_DATA = ods_export([
+    ("Annahmen", [(7, 2, ["Versicherungen?", "-Tom"]),
+                  (5, 3, ["Zeile weg", "-Tom"]),       # where the deleted row collapsed
+                  (1, 1, ["Kopfzeile", "-Tom"])]),
+    ("Personal Plan", [(40, 2, ["Checken", "-Tom"]), (41, 2, ["Nochmal", "zwei Zeilen", "-Tom"])]),
+])
+
+
+class DriveExec(Exec):
+    def __init__(self, result, body=None, error=None):
+        super().__init__(result, body)
+        self.error = error
+
+    def execute(self, **kw):
+        if self.error is not None:
+            raise self.error
+        return super().execute(**kw)
+
+
+class FakeDrive:
+    def __init__(self, found=COMMENTS, xlsx=XLSX_DATA, ods=ODS_DATA, broken=(), page=100):
+        self.found, self.data, self.broken, self.page = list(found), {
+            gsheets.XLSX: xlsx, gsheets.ODS: ods}, broken, page
+
+    def comments(self):
+        drive = self
+
+        class Comments:
+            def list(self, **kw):
+                calls.append(("drive.comments.list", kw))
+                start = int(kw.get("pageToken") or 0)
+                chunk = drive.found[start:start + drive.page]
+                more = start + drive.page < len(drive.found)
+                return DriveExec({"comments": chunk,
+                                  **({"nextPageToken": str(start + drive.page)} if more else {})})
+
+            def get(self, **kw):
+                calls.append(("drive.comments.get", kw))
+                found = next(c for c in drive.found if c["id"] == kw["commentId"])
+                # like Drive, leave `resolved` out rather than false on an open thread
+                return DriveExec({"resolved": True} if found.get("resolved") else {})
+        return Comments()
+
+    def files(self):
+        drive = self
+
+        class Files:
+            def export(self, **kw):
+                calls.append(("drive.files.export", kw))
+                error = (HttpError(Resp(), b'{"error": {"message": "This file is too large '
+                                           b'to be exported."}}')
+                         if kw["mimeType"] in drive.broken else None)
+                return DriveExec(drive.data[kw["mimeType"]], error=error)
+        return Files()
+
+    def replies(self):
+        class Replies:
+            def create(self, **kw):
+                calls.append(("drive.replies.create", kw))
+                return DriveExec({"id": "reply-1", **kw["body"]}, body=kw["body"])
+        return Replies()
+
+
+class Titled(Sheets):
+    """The spreadsheet's own tab names – the second one as the exports cannot spell it."""
+
+    def __init__(self, titles=("Annahmen", "Personal: Plan")):
+        super().__init__()
+        self.titles = titles
+
+    def get(self, **kw):
+        if kw.get("fields") == "sheets.properties.title":
+            calls.append(("get", kw))
+            return Exec({"sheets": [{"properties": {"title": t}} for t in self.titles]})
+        return super().get(**kw)
+
+
+def crun(argv, titles=("Annahmen", "Personal: Plan")):
+    return run(argv, sheets=Titled(titles))
+
+
+DRIVE[0] = FakeDrive()
+out, err = crun(["gsheets", "comments", "--json", "--all", "ID"])
+placed = {c["id"]: c for c in json.loads(out)}
+check("an open thread lands on its tab and cell",
+      (placed["open"]["tab"], placed["open"]["cell"], placed["open"]["placement"])
+      == ("Annahmen", "B7", "cell"), str(placed["open"]))
+check("a thread whose row was deleted is not reported on A1",
+      placed["orphan"]["placement"] == "deleted" and placed["orphan"]["cell"] is None,
+      str(placed["orphan"]))
+check("a resolved thread on A1 is marked unconfirmed, since nothing can confirm it",
+      (placed["resolvedA1"]["cell"], placed["resolvedA1"]["placement"]) == ("A1", "unsure"),
+      str(placed["resolvedA1"]))
+# the ODS export omits resolved threads, so a text found there belongs to an open one
+lookalike = gsheets.place_comments(
+    [comment("resA1", "2026-09-07T15:00:00.000Z", "Quelle?", resolved=True),
+     comment("resB5", "2026-09-07T15:01:00.000Z", "Quelle?", resolved=True),
+     comment("openC9", "2026-09-07T15:02:00.000Z", "Quelle?")],
+    [{"sheet": 0, "cell": cell, "created": f"2026-09-07T15:0{n}:00", "text": "Quelle?",
+      "reply": False} for n, cell in enumerate(("A1", "B5", "C9"))],
+    [{"sheet": 0, "cell": "C9", "lines": ["Quelle?", "-Tom"]}], ["T"])
+check("a resolved thread is not judged by an open one reading the same in the ODS export",
+      [(p["cell"], p["placement"]) for p in lookalike]
+      == [("A1", "unsure"), ("B5", "cell"), ("C9", "cell")],
+      str([(p["cell"], p["placement"]) for p in lookalike]))
+check("a genuine A1 thread the ODS export agrees with stays on A1",
+      (placed["realA1"]["cell"], placed["realA1"]["placement"]) == ("A1", "cell"),
+      str(placed["realA1"]))
+check("a resolved thread away from A1 keeps its cell", placed["done"]["cell"] == "D41")
+check("a comment without an anchor claims no cell",
+      placed["file"]["placement"] == "none" and placed["file"]["cell"] is None)
+check("a thread the export lacks is unknown, and a reply there is never taken for it",
+      placed["missing"]["placement"] == "unknown", str(placed["missing"]))
+check("a tab is named as the spreadsheet has it, not as the export shortened it",
+      placed["twinA"]["tab"] == "Personal: Plan", placed["twinA"]["tab"])
+check("two threads in one second are told apart by their text",
+      (placed["twinA"]["cell"], placed["twinB"]["cell"]) == ("B40", "B41"),
+      f"{placed['twinA']['cell']} {placed['twinB']['cell']}")
+check("a multi-line thread is still confirmed by its first line",
+      placed["twinB"]["placement"] == "cell", placed["twinB"]["placement"])
+check("the text the cell held is unescaped", placed["open"]["quoted"] == "Ø Honorar",
+      placed["open"]["quoted"])
+check("resolved reads as false where Drive leaves the field out",
+      placed["open"]["resolved"] is False)
+check("a deleted reply is dropped, the action reply kept as an action",
+      [(r["id"], r["action"]) for r in placed["done"]["replies"]]
+      == [("r1", None), ("r2", "resolve")],
+      str(placed["done"]["replies"]))
+kinds = [(name, kw.get("mimeType")) for name, kw in calls]
+check("a listing costs one list, one export of each kind and one read of the tab names",
+      kinds == [("drive.comments.list", None), ("drive.files.export", gsheets.XLSX),
+                ("get", None), ("drive.files.export", gsheets.ODS)], str(kinds))
+check("the listing asks Drive for replies and the resolved flag by name",
+      "resolved" in calls[0][1]["fields"] and "replies(" in calls[0][1]["fields"],
+      calls[0][1]["fields"])
+check("a listing writes nothing", not any(sent), str(sent))
+
+out, err = crun(["gsheets", "comments", "ID"])
+check("the text listing leaves resolved threads out by default",
+      "id=done" not in out and "id=open" in out, repr(out[:60]))
+check("and says how many it left out, on stderr",
+      "2 resolved thread(s) not shown – --all includes them" in err, err.strip())
+check("a tab name that needs quoting is quoted, so the reference can be reused",
+      "'Personal: Plan'!B40" in out, out[out.find("Personal") - 1:][:24])
+check("an orphan says its cell was deleted, and what the cell read",
+      "(its cell was deleted)" in out and "'2: comment B5'" in out,
+      out[out.find("id=orphan") - 36:][:60])
+out, _ = crun(["gsheets", "comments", "--all", "ID"])
+check("--all prints resolved threads, their replies and the status change",
+      "id=done" in out and "Kai" in out and "(marked resolved)" in out,
+      out[out.find("> Kai"):][:60])
+check("an unconfirmed A1 says so in the listing",
+      "Annahmen!A1 (unconfirmed – may be a deleted cell)" in out,
+      out[out.find("unconfirmed") - 12:][:60])
+
+DRIVE[0] = FakeDrive(found=COMMENTS, page=4)
+out, _ = crun(["gsheets", "comments", "--json", "--all", "ID"])
+check("every page of threads is fetched",
+      len(json.loads(out)) == len(COMMENTS)
+      and sum(1 for name, _ in calls if name == "drive.comments.list") == 3,
+      str(sum(1 for name, _ in calls if name == "drive.comments.list")))
+
+DRIVE[0] = FakeDrive(found=[])
+out, _ = crun(["gsheets", "comments", "ID"])
+check("a sheet without comments exports nothing",
+      out.strip() == "no comments" and not any(name == "drive.files.export" for name, _ in calls),
+      str([name for name, _ in calls]))
+
+DRIVE[0] = FakeDrive(found=[c for c in COMMENTS if c.get("resolved")])
+crun(["gsheets", "comments", "ID"])
+check("with no open thread the ODS export is skipped – it omits resolved ones anyway",
+      [kw.get("mimeType") for name, kw in calls if name == "drive.files.export"] == [gsheets.XLSX],
+      str([kw.get("mimeType") for name, kw in calls]))
+
+DRIVE[0] = FakeDrive(broken=(gsheets.XLSX,))
+out, err = crun(["gsheets", "comments", "--json", "ID"])
+check("a failed export still lists the threads, unplaced",
+      LAST_EXIT is None and all(c["placement"] in ("unknown", "none") for c in json.loads(out)),
+      str(LAST_EXIT))
+check("and says which export failed, why, and that the threads have no cell",
+      "XLSX export could not be read" in err and "too large" in err
+      and "listed without a cell" in err, err.strip()[:90])
+
+DRIVE[0] = FakeDrive(broken=(gsheets.ODS,))
+out, err = crun(["gsheets", "comments", "--json", "--all", "ID"])
+placed = {c["id"]: c for c in json.loads(out)}
+check("without the ODS export an A1 thread is unconfirmed rather than trusted",
+      placed["realA1"]["placement"] == "unsure" and placed["open"]["placement"] == "cell",
+      f"{placed['realA1']['placement']} {placed['open']['placement']}")
+check("and the warning says only A1 lost its check, not that the cells went",
+      "no thread on A1 can be confirmed" in err and "without a cell" not in err, err.strip()[:90])
+
+broken_ods = io.BytesIO()
+with zipfile.ZipFile(broken_ods, "w") as z:
+    z.writestr("content.xml", '<office:document-content '
+               'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+               'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body>'
+               '<office:spreadsheet><table:table table:name="Annahmen"><table:table-row>'
+               '<table:table-cell table:number-columns-repeated=""/></table:table-row>'
+               '</table:table></office:spreadsheet></office:body></office:document-content>')
+DRIVE[0] = FakeDrive(ods=broken_ods.getvalue())
+out, err = crun(["gsheets", "comments", "--json", "--all", "ID"])
+check("a malformed ODS export is a warning, not a traceback",
+      LAST_EXIT is None and "ODS export could not be read" in err and json.loads(out),
+      err.strip()[:70])
+
+check("the ODS counter follows repeated rows, repeated cells and covered cells",
+      [(a["sheet"], a["cell"]) for a in gsheets.ods_annotations(ODS_DATA)[1]] ==
+      [(0, "A1"), (0, "C5"), (0, "B7"), (1, "B40"), (1, "B41")],
+      str([(a["sheet"], a["cell"]) for a in gsheets.ods_annotations(ODS_DATA)[1]]))
+check("the XLSX reader finds a thread part named by an absolute path",
+      {t["cell"] for t in gsheets.xlsx_threads(XLSX_DATA)[1] if t["sheet"] == 1} == {"B40", "B41"})
+check("both readers report every sheet in order, those without comments too",
+      gsheets.xlsx_threads(xlsx_export([("A", []), ("B", [])]))[0] == ["A", "B"]
+      and gsheets.ods_annotations(ODS_DATA)[0] == ["Annahmen", "Personal Plan"])
+
+# should the counts ever disagree, positions prove nothing – say so, and fall back
+DRIVE[0] = FakeDrive()
+out, err = crun(["gsheets", "comments", "--json", "--all", "ID"], titles=("A", "B", "C"))
+placed = {c["id"]: c for c in json.loads(out)}
+check("a sheet count that does not match falls back to the exported names, and says so",
+      placed["twinA"]["tab"] == "Personal Plan" and "named as exported" in err, err.strip()[:70])
+DRIVE[0] = FakeDrive(ods=ods_export([("Annahmen", [(5, 3, ["Zeile weg", "-Tom"])])]))
+out, err = crun(["gsheets", "comments", "--json", "--all", "ID"])
+placed = {c["id"]: c for c in json.loads(out)}
+check("exports disagreeing on the sheet count skip the deleted-cell check rather than misapply it",
+      placed["orphan"]["placement"] == "unsure" and "no thread can be checked" in err,
+      f"{placed['orphan']['placement']} {err.strip()[:50]}")
+
+# writing: a reply, and resolving or reopening as a reply carrying the action
+DRIVE[0] = FakeDrive()
+out, _ = run(["gsheets", "reply", "ID", "open", "Erledigt", "im", "Plan"])
+kw = calls[-1][1]
+check("reply answers the thread it names, words joined",
+      (calls[-1][0], kw["commentId"], kw["body"]) ==
+      ("drive.replies.create", "open", {"content": "Erledigt im Plan"}), str(kw))
+check("reply says what it did", out.strip() == "replied to comment open", out.strip())
+out, _ = run(["gsheets", "resolve", "ID", "open"])
+check("resolve sends the action alone – measured to need no text",
+      calls[-1][1]["body"] == {"action": "resolve"} and out.strip() == "resolved comment open",
+      str(calls[-1][1]["body"]))
+run(["gsheets", "resolve", "ID", "open", "Siehe", "B7"])
+check("resolve carries a reason when given one",
+      calls[-1][1]["body"] == {"action": "resolve", "content": "Siehe B7"},
+      str(calls[-1][1]["body"]))
+out, _ = run(["gsheets", "reopen", "ID", "done"])
+check("reopen is the same reply with the other action",
+      calls[-1][1]["body"] == {"action": "reopen"} and out.strip() == "reopened comment done",
+      str(calls[-1][1]["body"]))
+# Google stacks a second status line on a thread already in that state – measured –
+# so a script run twice would litter every thread it touched
+out, _ = run(["gsheets", "resolve", "ID", "done"])
+check("resolving a resolved thread sends nothing",
+      not any(name == "drive.replies.create" for name, _ in calls)
+      and out.strip() == "comment done is already resolved – nothing sent", out.strip())
+check("the state is read by its one field", calls[0][1].get("fields") == "resolved",
+      str(calls[0][1]))
+out, _ = run(["gsheets", "reopen", "ID", "open", "Nochmal", "prüfen"])
+check("reopening an open thread sends nothing, and says where its text can go",
+      not any(name == "drive.replies.create" for name, _ in calls) and "`reply`" in out,
+      out.strip())
+kind, got = direct(lambda: gsheets.Client("ID", service=Sheets(),
+                                          drive=FakeDrive()).resolve("done"))
+check("in-process, a resolve with nothing to do returns None", (kind, got) == ("ok", None),
+      f"{kind}: {got}")
+sent.clear()
+out, _ = run(["gsheets", "resolve", "--dry-run", "ID", "open"])
+check("resolve honours --dry-run",
+      json.loads(out)["body"] == {"action": "resolve"} and not any(sent), out[:60])
+run(["gsheets", "reply", "ID", "open", " "])
+check("an empty reply is refused", isinstance(LAST_EXIT, str) and "empty" in LAST_EXIT,
+      str(LAST_EXIT)[:40])
+for cmd, need in (("reply", 2), ("resolve", 1), ("reopen", 1)):
+    run(["gsheets", cmd, "ID"])
+    check(f"{cmd} reports missing arguments",
+          isinstance(LAST_EXIT, str) and f"expected {need} argument" in LAST_EXIT,
+          str(LAST_EXIT)[:50])
+run(["gsheets", "get", "--all", "ID", "A1"])
+check("--all is refused off `comments`",
+      isinstance(LAST_EXIT, str) and "applies to `comments`" in LAST_EXIT, str(LAST_EXIT)[:50])
+
+DRIVE[0] = None
+run(["gsheets", "info", "ID"])
+check("a Sheets command never builds the Drive service", LAST_EXIT is None, str(LAST_EXIT)[:60])
+
+# A token from before the Drive scope must be told the fix, not handed Google's 403 –
+# and must not have built anything on the way there.
+fd, old_token = tempfile.mkstemp(suffix=".json")
+with os.fdopen(fd, "w") as f:
+    json.dump({"email": "tester@example.com", "email_source": "id_token",
+               "scopes": [gauth.SHEETS_SCOPE, gauth.DOCS_SCOPE]}, f)
+gauth.TOKEN = old_token
+_real_build = gcomments.build
+gcomments.build = lambda *a, **kw: (_ for _ in ()).throw(AssertionError("built without the scope"))
+kind, msg = direct(REAL_DRIVE_API)
+gcomments.build = _real_build
+check("drive_api() refuses a token without the Drive scope, naming the fix",
+      kind == "ToolError" and "no Google Drive scope" in msg and "auth.py" in msg,
+      f"{kind}: {str(msg)[:60]}")
+os.unlink(old_token)
 
 print("\nFAILURES:", fails if fails else "none")
 sys.exit(1 if fails else 0)

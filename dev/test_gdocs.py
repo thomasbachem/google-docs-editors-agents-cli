@@ -2,8 +2,8 @@
 """Drive gdocs.py's command branches against a fake Docs API.
 
 No network and no Google account: the token is a throwaway file, so this also
-covers `create`, which would otherwise leave an undeletable document behind
-(the tool holds no Drive scope).
+covers `create`, which would otherwise leave a document behind that no command
+here deletes.
 """
 
 import contextlib

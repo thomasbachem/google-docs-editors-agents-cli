@@ -76,8 +76,8 @@ the peak true for a build running several at once; remove the file between runs.
 
 There is no Markdown or HTML import: text goes in plain and structure is
 applied afterwards with `style`/`format`. A converting Drive upload could do it
-in one step, but needs a Drive scope this tool deliberately does not hold –
-which is also why it cannot delete, move, rename or share a file.
+in one step and is not built. The shared token holds a Drive scope, for
+spreadsheet comments, yet no command here deletes, moves, renames or shares a file.
 """
 
 import json

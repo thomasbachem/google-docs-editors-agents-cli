@@ -65,7 +65,7 @@ class StubService:
 
         return E()
 
-    spreadsheets = documents = _endpoint
+    spreadsheets = documents = files = _endpoint
 
 
 def stub_build(disabled=(), err=None):
@@ -250,6 +250,10 @@ try:
           out.strip().splitlines()[-1][:70] if out.strip() else "silent")
     check("both are probed, so the second one is not missed",
           "Docs API is not enabled" in warned(stub_build(disabled=("docs",))))
+    out = warned(stub_build(disabled=("drive",)))
+    check("Drive is probed too, and its warning names only what needs it",
+          "Drive API is not enabled" in out and "gsheets comments" in out
+          and "gdocs" not in out, out.strip().splitlines()[1][:70] if out.strip() else "silent")
     check("an enabled API stays silent", warned(stub_build()) == "")
     # Measured against Drive: no scope answers 403 before the service check runs,
     # so a bare status match would send the caller to the wrong Console page.

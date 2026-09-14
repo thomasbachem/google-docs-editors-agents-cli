@@ -5,9 +5,13 @@
     python3 auth.py [path-to-the-downloaded-client-json]
 
 Scopes: spreadsheets and documents (read/write the contents of sheets and
-docs) plus openid + userinfo.email, which are identity-only and exist so the
-tools can report which Google account they act as. No Drive scope, so files
-still cannot be deleted, moved, renamed or shared.
+docs), drive, plus openid + userinfo.email, which are identity-only and exist
+so the tools can report which Google account they act as.
+
+drive is there for comments, which Google serves only through the Drive API.
+It is the whole Drive: the token can delete, move, rename and share any file in
+the account. No command here does – that restraint lives in the code now, not
+in the token.
 """
 
 import base64
@@ -40,6 +44,7 @@ CONSENT_TIMEOUT = 600
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/drive",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
@@ -115,18 +120,27 @@ def warn_disabled_apis(creds):
     and calling that a disabled API would send the caller to the wrong Console page.
     If Google ever rewords this, the check goes quiet rather than wrong – the 403 at
     first use is then what it always was.
+
+    Drive's answers were measured too: enabled, "HTTP 404: File not found: …";
+    disabled, "Google Drive API has not been used in project N before or it is
+    disabled". Only the comment commands need it, so that warning says so rather
+    than condemning the tools.
     """
-    for name, version, ask in (
-        ("Sheets", ("sheets", "v4"), lambda s: s.spreadsheets().get(spreadsheetId=NO_SUCH_ID)),
-        ("Docs", ("docs", "v1"), lambda s: s.documents().get(documentId=NO_SUCH_ID)),
+    for name, version, ask, fails in (
+        ("Sheets", ("sheets", "v4"), lambda s: s.spreadsheets().get(spreadsheetId=NO_SUCH_ID),
+         "gsheets will fail on first use"),
+        ("Docs", ("docs", "v1"), lambda s: s.documents().get(documentId=NO_SUCH_ID),
+         "gdocs will fail on first use"),
+        ("Drive", ("drive", "v3"), lambda s: s.files().get(fileId=NO_SUCH_ID),
+         "`gsheets comments`, `reply`, `resolve` and `reopen` will fail"),
     ):
         try:
             ask(build(*version, credentials=creds)).execute()
         except HttpError as err:
             text = str(err)
             if "has not been used in project" in text or "SERVICE_DISABLED" in text:
-                print(f"\nWARNING: the {name} API is not enabled in this project, so the\n"
-                      f"tools will fail on first use. Google says:\n"
+                print(f"\nWARNING: the {name} API is not enabled in this project, so\n"
+                      f"{fails}. Google says:\n"
                       f"  {gauth.http_error_message(err)}", file=sys.stderr)
         except Exception:
             # A probe is not worth failing an authorization that already worked.

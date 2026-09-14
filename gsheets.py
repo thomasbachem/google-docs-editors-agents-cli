@@ -33,6 +33,11 @@ Usage:
   gsheets group-rows <sheet> <tab> <from> <to>     # outline rows into a group
   gsheets ungroup-rows <sheet> <tab> <from> <to>   # remove one outline level
   gsheets batch  <sheet> <json>               # raw batchUpdate requests (escape hatch)
+  gsheets comments <sheet>                    # open comment threads, each with its cell
+                                              #   (--all adds resolved ones, --json)
+  gsheets reply   <sheet> <comment-id> <text> # answer a thread
+  gsheets resolve <sheet> <comment-id> [text] # mark it resolved, optionally saying why
+  gsheets reopen  <sheet> <comment-id> [text] # and back
 
 <sheet> may be a full docs.google.com URL or a bare spreadsheet id.
 --dry-run prints the request a writing command would send, and sends nothing.
@@ -87,9 +92,44 @@ covering only part of the text stays in `textFormatRuns`, where `hyperlink` is
 then null. `cells` reads all three, so it shows the link either way.
 
 Drive smart chips (`chipRuns`/`richLinkProperties`, the hover-preview file chips)
-need a Drive scope this tool deliberately does not hold, and fail with
-HTTP 403 "The request scopes are not sufficient for reading from Drive".
-Use `link` for a plain hyperlink instead.
+READ with any token, as `cells --fields=chipRuns`. WRITING one needs the Drive
+scope – measured, a token without it gets HTTP 403 "The request scopes are not
+sufficient for reading from Drive" – and goes through `batch`: an `updateCells`
+whose value is the placeholder "@" with a chip run at startIndex 0 carrying
+{"richLinkProperties": {"uri": <file URL>}}. Sheets replaces the "@" with the
+file's title. `link` stays the way to a plain hyperlink.
+
+Comments – the threads in the side panel, not cell notes, which `cells` reads –
+live in the Drive API, and the Drive scope is held for them. Drive does not say
+which cell a comment is on: its anchor is an opaque number
+({"type":"workbook-range","uid":0,"range":"266433416"}) the Sheets API never
+mentions. So `comments` reads the cell off an XLSX export of the file, joined to
+Drive's thread by creation second. Measured: the cell follows inserted rows,
+sorted ones and a row moved with `moveDimension`, and a resolved thread is marked
+done there too. A cell moved with `cutPaste` through `batch` takes its comment
+along, in the Sheets interface as well – the one way to move a comment, content
+and all.
+
+One trap survives it. DELETE the row or column a comment sits on and Drive keeps
+the thread open with nothing marking it, while the XLSX export puts it on A1 – a
+cell that looks real. An ODS export keeps it where the grid closed up, so where
+the XLSX export says A1 and the ODS one finds the text on one other cell,
+`comments` says the cell was deleted; any other disagreement leaves the cell
+unconfirmed. The ODS export omits resolved threads, though, so a resolved
+comment on A1 cannot be told from an orphan and is marked unconfirmed. Tab names
+come from the sheet itself, matched by position: both exports strip
+: \\ / ? * [ ] from them, and XLSX cuts them to 31 characters. Three Drive calls
+and one Sheets read per listing – none of the exports for a sheet without comments.
+
+No command CREATES a comment, deliberately: Drive takes no cell for one. Given an
+existing thread's anchor, a new comment lands on that cell in both exports yet is
+not shown on it in the Sheets interface; given none, it has no marker at all, and
+the Comments pane heads it "original content deleted".
+Both measured, and Google documents it: the editors "treat these comments as
+unanchored". Reply, resolve and reopen work, and show there straight away.
+Google also takes a second resolve on a resolved thread, stacking another status
+line in it, so `resolve` and `reopen` read the state first and send nothing
+when it is already so.
 
 Several ranges in one call – the difference between one request and N against
 a quota that counts calls, not requests:
@@ -254,16 +294,20 @@ counting the run before. In-process the same numbers are on `gauth.calls`
 (`counts()`, `peak()`, `records()`) without the env var.
 """
 
+import io
 import json
+import posixpath
 import re
 import sys
+import zipfile
+from xml.etree import ElementTree
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from gauth import (DryRun, RetryingRequest, ToolError, account, as_int,
-                   credentials, http_error_message, load_json, project, send,
-                   split_flags)
+import gcomments
+from gauth import (DryRun, RetryingRequest, ToolError, account, as_int, credentials,
+                   http_error_message, load_json, project, send, split_flags)
 
 # "0.125", "1.234.567" – strings a non-English locale mis-parses (grouped
 # integer) or refuses to parse at all (left as text). Never the intended number.
@@ -386,6 +430,18 @@ DELETE_REQUEST = {
                           lambda v: {"deleteDeveloperMetadata": {
                               "dataFilter": {"developerMetadataLookup": {"metadataId": v}}}}),
 }
+
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+ODS = "application/x-vnd.oasis.opendocument.spreadsheet"
+
+XL_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XL_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+XL_PKG = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+XL_THREAD = "{http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments}"
+ODS_TABLE = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
+ODS_OFFICE = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}"
+ODS_TEXT = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
 
 
 def sheet_id(ref):
@@ -697,7 +753,147 @@ def warn_locale(s, ref, values):
         )
 
 
-class Client:
+def xlsx_threads(data):
+    """The sheet names in an XLSX export, and every threaded comment in it.
+
+    This is where a comment's cell comes from at all – Drive's own anchor is an
+    opaque number the Sheets API never mentions. The cell is found the way Excel
+    finds it: workbook -> sheet part -> that sheet's threadedComment part. The
+    export's thread ids are no help in joining back to Drive, being regenerated
+    on every export (measured), so `created` is what carries the join.
+
+    Each thread carries its sheet's POSITION, because the names cannot be trusted:
+    the export strips : \\ / ? * [ ] from a tab name and cuts it to 31 characters,
+    and renames a clash that makes to "Tabellenblatt2" – measured. Every tab is
+    listed, hidden ones too, in the sheet's own order.
+    """
+    zipped = zipfile.ZipFile(io.BytesIO(data))
+    names = set(zipped.namelist())
+
+    def related(part):
+        rels = posixpath.join(posixpath.dirname(part), "_rels", posixpath.basename(part) + ".rels")
+        if rels not in names:
+            return {}
+        found = {}
+        for rel in ElementTree.fromstring(zipped.read(rels)).iter(XL_PKG + "Relationship"):
+            target = rel.get("Target", "")
+            target = (target.lstrip("/") if target.startswith("/") else
+                      posixpath.normpath(posixpath.join(posixpath.dirname(part), target)))
+            found[rel.get("Id")] = (rel.get("Type", "").rsplit("/", 1)[-1], target)
+        return found
+
+    sheets = related("xl/workbook.xml")
+    sheet_names, threads = [], []
+    for position, sheet in enumerate(
+            ElementTree.fromstring(zipped.read("xl/workbook.xml")).iter(XL_MAIN + "sheet")):
+        sheet_names.append(sheet.get("name"))
+        _, part = sheets.get(sheet.get(XL_REL + "id"), ("", ""))
+        for kind, target in related(part).values():
+            if kind != "threadedComment" or target not in names:
+                continue
+            for item in ElementTree.fromstring(zipped.read(target)).iter(
+                    XL_THREAD + "threadedComment"):
+                text = item.find(XL_THREAD + "text")
+                threads.append({
+                    "sheet": position, "cell": item.get("ref"),
+                    # UTC, truncated to the second: 14:21:18.389Z in Drive is 14:21:18.00 here
+                    "created": (item.get("dT") or "")[:19],
+                    "text": "".join(text.itertext()) if text is not None else "",
+                    "reply": item.get("parentId") is not None})
+    return sheet_names, threads
+
+
+def ods_annotations(data):
+    """The table names in an ODS export, and every cell annotation with its cell.
+
+    Positions are counted rather than read – a row or cell repeated N times
+    stands for N of them. Of the formats Google exports, this is the one that
+    keeps a comment whose row or column was deleted away from A1, which is its whole use.
+    Tables are identified by position, as in xlsx_threads(): this export strips
+    the same characters from a tab name, though it keeps the length.
+    """
+    root = ElementTree.fromstring(zipfile.ZipFile(io.BytesIO(data)).read("content.xml"))
+    names, found = [], []
+    for position, table in enumerate(root.iter(ODS_TABLE + "table")):
+        names.append(table.get(ODS_TABLE + "name"))
+        row = 0
+        for tr in table.iter(ODS_TABLE + "table-row"):
+            col = 0
+            for cell in tr:
+                for note in cell.iter(ODS_OFFICE + "annotation"):
+                    found.append({"sheet": position, "cell": f"{col_name(col)}{row + 1}",
+                                  "lines": ["".join(p.itertext())
+                                            for p in note.findall(ODS_TEXT + "p")]})
+                col += int(cell.get(ODS_TABLE + "number-columns-repeated", "1"))
+            row += int(tr.get(ODS_TABLE + "number-rows-repeated", "1"))
+    return names, found
+
+
+def place_comments(comments, threads, annotations, titles):
+    """Drive's threads, each with the tab and cell the exports put it on.
+
+    `titles` are the tab names in sheet order, which the exports' positions index.
+
+    `placement` says how far that cell can be trusted:
+      cell     the exports agree, or a cell other than A1 the ODS export has
+               nothing against – taken as is
+      deleted  its row or column is gone: the XLSX export says A1 and the ODS
+               one says elsewhere, which is how an orphan has shown every time
+      unsure   A1 with nothing to confirm it (a resolved thread never reaches
+               the ODS export), or the ODS export puts the text on one other cell
+      none     no anchor – a comment on the file, not on a cell
+      unknown  no export thread matched it, or no export was read
+    """
+    roots = [t for t in threads if not t["reply"]]
+    placed = []
+    for c, match in zip(comments, gcomments.match_threads(comments, roots)):
+        text = c.get("content") or ""
+        tab = cell = None
+        if not c.get("anchor"):
+            placement = "none"
+        elif match is None:
+            placement = "unknown"
+        else:
+            tab = titles[match["sheet"]]
+            cell = match["cell"]
+            first = text.strip().splitlines()[0].strip() if text.strip() else ""
+            seen = [a["cell"] for a in annotations if a["sheet"] == match["sheet"]
+                    and a["lines"] and a["lines"][0].strip() == first]
+            # the ODS export leaves resolved threads out, so what it holds is another's
+            if not c.get("resolved") and cell in seen:
+                placement = "cell"
+            elif not c.get("resolved") and len(seen) == 1:
+                placement = "deleted" if cell == "A1" else "unsure"
+            else:
+                placement = "unsure" if cell == "A1" else "cell"
+            if placement == "deleted":
+                cell = None
+        placed.append({"id": c.get("id"), "tab": tab, "cell": cell, "placement": placement,
+                       **gcomments.record(c)})
+    return placed
+
+
+def quoted_tab(title):
+    """A tab name as an A1 reference wants it – quoted unless it is a plain word."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", title or ""):
+        return title
+    return "'" + (title or "").replace("'", "''") + "'"
+
+
+def comment_lines(c):
+    """One thread as the `comments` command prints it."""
+    ref = f"{quoted_tab(c['tab'])}!{c['cell']}" if c["tab"] and c["cell"] else ""
+    where = {"cell": ref,
+             "unsure": f"{ref} (unconfirmed – may be a deleted cell)",
+             "deleted": f"{quoted_tab(c['tab'] or '')} (its cell was deleted)",
+             "none": "(no cell – a comment on the file)",
+             "unknown": "(cell unknown)"}[c["placement"]]
+    doubt = c["placement"] in ("deleted", "unsure", "unknown") and c["quoted"]
+    return gcomments.thread_lines(
+        where, c, f"(the cell read {c['quoted']!r} when this was written)" if doubt else "")
+
+
+class Client(gcomments.Threads):
     """The commands as methods, so they can be used without a subprocess.
 
     Every guard the CLI applies applies here – the locale check, the retry, the
@@ -714,10 +910,11 @@ class Client:
     prints the request and raises DryRun, exactly as --dry-run does.
     """
 
-    def __init__(self, sheet, service=None, dry=False):
+    def __init__(self, sheet, service=None, dry=False, drive=None):
         self.id = sheet_id(sheet)
         self.service = service or api()
         self.dry = dry
+        self._drive = drive
 
     def api(self):
         """The service this drives, for anything these methods do not cover.
@@ -726,6 +923,44 @@ class Client:
         `sheet.api()` is the obvious guess, and guessing wrong costs a call.
         """
         return self.service
+
+    def comments(self):
+        """Every comment thread, open and resolved, with the cell it is on.
+
+        Three Drive calls for up to 100 threads – the threads, and an XLSX and an
+        ODS export to place them – plus one Sheets read for the real tab names,
+        which the exports mangle. See place_comments() for what each placement
+        means. No thread costs no export; no open one skips the ODS export,
+        which omits resolved threads anyway. A failed export is reported rather
+        than failing the listing: without the XLSX one no thread has a cell,
+        without the ODS one no A1 can be confirmed or found to be a deleted cell.
+        """
+        found = self.threads()
+        names, threads, annotations = [], [], []
+        anchored = [c for c in found if c.get("anchor")]
+        if anchored:
+            names, threads = self._exported(
+                "XLSX", XLSX, xlsx_threads, "the threads are listed without a cell") or ([], [])
+        titles = names
+        if threads:
+            got = self.service.get(spreadsheetId=self.id,
+                                   fields="sheets.properties.title").execute()
+            actual = [s["properties"]["title"] for s in got.get("sheets", [])]
+            if len(actual) == len(names):
+                titles = actual
+            else:
+                print(f"WARNING: the XLSX export lists {len(names)} sheets and the spreadsheet "
+                      f"has {len(actual)}, so tabs are named as exported – which may be "
+                      f"shortened or stripped of : \\ / ? * [ ]", file=sys.stderr)
+        if threads and any(not c.get("resolved") for c in anchored):
+            ods_names, annotations = self._exported(
+                "ODS", ODS, ods_annotations, "no thread on A1 can be confirmed, nor one whose cell "
+                "was deleted told from it") or ([], [])
+            if annotations and len(ods_names) != len(names):
+                print(f"WARNING: the two exports list {len(names)} and {len(ods_names)} sheets, "
+                      f"so no thread can be checked for a deleted cell", file=sys.stderr)
+                annotations = []
+        return place_comments(found, threads, annotations, titles)
 
     def info(self):
         """Spreadsheet metadata: title, locale, and every tab's properties."""
@@ -821,8 +1056,8 @@ class Client:
         """The batchUpdate requests that would remove every redundant copy.
 
         Returned, never sent. Deleting a sheet object cannot be undone through
-        this tool – there is no Drive scope and no version history here – so
-        the decision to apply them stays with the caller: `batch(…)`.
+        this tool – nothing here reads or restores version history – so the
+        decision to apply them stays with the caller: `batch(…)`.
         """
         return duplicate_requests(self.objects(*tabs, whole=True))
 
@@ -1034,7 +1269,7 @@ def create(title, service=None, dry=False):
 def dispatch():
     values, flags, argv = split_flags(sys.argv, ("fields", "count"),
                                       ("--dry-run", "--json", "--duplicates", "--sizes",
-                                       "--row-numbers"))
+                                       "--row-numbers", "--all"))
     if values["fields"] == "":
         raise ToolError("--fields= is empty – drop the option to use the default mask")
     fields, dry = values["fields"] or "", "--dry-run" in flags
@@ -1044,8 +1279,11 @@ def dispatch():
         sys.exit(2)
 
     cmd = argv[1]
-    if "--json" in flags and cmd != "objects":
-        raise ToolError("--json applies to `objects` – for values, `json` is its own command")
+    if "--json" in flags and cmd not in ("objects", "comments"):
+        raise ToolError("--json applies to `objects` and `comments` – for values, `json` is "
+                        "its own command")
+    if "--all" in flags and cmd != "comments":
+        raise ToolError("--all applies to `comments`")
     if "--sizes" in flags and cmd != "reset":
         raise ToolError("--sizes applies to `reset`")
     if "--row-numbers" in flags and cmd not in ("get", "json"):
@@ -1075,7 +1313,8 @@ def dispatch():
     args = argv[3:]
     needed = {"cells": 1, "link": 2, "update": 2, "append": 2, "clear": 1,
               "delete-rows": 3, "batch": 1, "update-many": 1, "reset": 1,
-              "insert-rows": 2, "group-rows": 3, "ungroup-rows": 3}.get(cmd, 0)
+              "insert-rows": 2, "group-rows": 3, "ungroup-rows": 3,
+              **gcomments.NEEDED}.get(cmd, 0)
     if len(args) < needed:
         raise ToolError(f"{cmd}: expected {needed} argument(s) after <sheet>, got "
                         f"{len(args)} – run `gsheets` for usage")
@@ -1233,6 +1472,9 @@ def dispatch():
 
     elif cmd == "batch":
         print(json.dumps(sheet.batch(load_json(args[0], "batch")), ensure_ascii=False))
+
+    elif cmd in gcomments.COMMANDS:
+        gcomments.run_command(cmd, sheet, args, flags, comment_lines)
 
     else:
         print(f"unknown command: {cmd}", file=sys.stderr)

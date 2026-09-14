@@ -141,6 +141,106 @@ neither are dimension groups — for a different reason: deleting one by its ran
 rather than removing a copy. Every delete shape that *is* emitted was applied to a real duplicate
 and checked.
 
+## Comments: which cell, and when that can be trusted
+
+Comment threads – the side panel, not cell notes – are Drive objects, and Drive does not say where
+they are. Every anchor on a spreadsheet reads `{"type":"workbook-range","uid":0,"range":"<n>"}`:
+`uid` was 0 on all of them, and none of the numbers appears anywhere in the spreadsheet's Sheets
+metadata. Measured on 2026-09-14, on a real sheet with 11 threads and on the scratch sheet.
+
+`gsheets comments` therefore reads the cell off an **XLSX export**, whose
+`xl/threadedComments/*.xml` carries each thread's `ref`, its creation time and a `done` flag. The
+export's thread ids are unrelated to Drive's and regenerated on every export, so the join is on
+creation time: Drive's `2026-09-07T14:21:18.389Z` is the export's `2026-09-07T14:21:18.00`, UTC and
+truncated. Text breaks a tie within one second. Across both sheets every thread matched exactly one
+entry.
+
+What held, each checked by moving the sheet under the comments and exporting again:
+
+| Change | XLSX export | ODS export |
+|---|---|---|
+| rows inserted above | follows (B5 -> B8) | follows |
+| rows sorted | follows the row | – |
+| row moved with `moveDimension` | follows (B4 -> B7) | follows |
+| cell moved with `cutPaste` | follows (B2 -> D2) | follows |
+| thread resolved | `done="1"`, always equal to Drive's `resolved` | **omitted** |
+| comment made on a range C8:D9 | one cell, D9 | – |
+| **the comment's row deleted** | **A1** | where the row collapsed, on the row below (B5, then B7 after 2 rows inserted above) |
+| **the comment's column deleted** | **A1** | where the column collapsed, on the column to its right (H5) |
+
+Both moves showed in the Sheets interface too: the marker sat on the new cell, and the Comments pane
+headed each thread with it (`Tabellenblatt1 · D2 · ① Cut and pasted`, the last part the quoted
+snapshot). A cut is therefore how a comment moves at all – its cell's content moves with it.
+
+The last two rows are the trap. Drive keeps the orphaned thread open and marks nothing, and A1 looks
+like a real cell – the Sheets interface shows the thread on no cell at all, and its Comments pane
+leaves the cell out of the heading (`Tabellenblatt1 · · ③ Orphan by column`). The ODS export is
+what catches it: it agreed with the XLSX export on every genuine open comment compared – 11
+comments, 21 comparisons across moves – and disagreed on every orphan in every export taken after
+its cell went, 8 readings of 5 orphans. Four lost their row and one its column; two carried a reply
+(one typed, one through the API) and one an @mention. Still a pattern rather than a law. `comments`
+exports both, and reports a thread whose exports disagree that way as deleted.
+
+`comments` finds a thread in the ODS export by its first line, which replies and mentions leave
+alone: a thread is one annotation there – its text, `-Thomas Bachem`, then each reply followed by
+its author – and a mention reads `@mail@thomasbachem.com` as in Drive and the XLSX export.
+
+Two limits on that check:
+
+- **Resolved threads are absent from the ODS export**, so a resolved thread on A1 cannot be told
+  from a resolved orphan. It is reported as unconfirmed rather than guessed.
+- **The ODS export holds one comment per cell**, the newest. The Sheets interface showed one thread
+  per cell, and the only second thread on a cell seen was one made through the API.
+
+`quotedFileContent` – the text of the cell a comment was made on – would be the obvious other clue,
+and is not one: it is a snapshot, unchanged after the cell was rewritten. It is printed for a thread
+whose cell is in doubt, as what the cell *used to* say. It arrives HTML-escaped (`&#216;`). Drive's
+`resolved` field can be absent rather than `false` on a thread never resolved – it was on the
+scratch sheet's, not on the real sheet's – so it is read with a default.
+
+**Tab names cannot be taken from either export.** The XLSX one strips `: \ / ? * [ ]` and cuts a
+name to 31 characters – `Plan: Q1/Q2 [Entwurf]? *mit sehr langem Tabnamen*` became `Plan Q1Q2
+Entwurf mit sehr lang` – and when that makes two names alike it renames the second
+`Tabellenblatt2`. The ODS one strips the same characters and keeps the length. Both list every
+tab, hidden ones included, in the spreadsheet's own order, so `comments` takes the names from one
+Sheets read and lines the exports up by position.
+
+A listing is three Drive calls and that one Sheets read, all reads. Not yet measured: how the
+exports fare on a large workbook, where Google documents a size limit. A failed export is reported
+rather than failing the listing: without the XLSX one the threads have no cell, without the ODS
+one they keep theirs and no A1 can be confirmed or found to be a deleted cell.
+
+Reading the exports alone needs no Drive scope at all:
+`docs.google.com/spreadsheets/d/<id>/export?format=xlsx` and `format=ods` both answered a token
+holding only `spreadsheets`. But that is an undocumented web endpoint, and without Drive there are
+no thread ids to reply to.
+
+**Writing** is a reply: `replies.create` with `content`, or with `action: "resolve"`/`"reopen"`,
+where a resolve needs no text. All three show in the Sheets interface at once. Google also takes a
+resolve on a thread already resolved, and a reopen on one already open, adding another status line
+each time – so `resolve` and `reopen` read the thread's state first and send nothing when it is
+already there, which keeps a script run twice from littering every thread it touched. After a
+reopen, the XLSX export lists the resolve and reopen as replies in the account's language ("Als
+geklärt gekennzeichnet", "Erneut geöffnet"), which is why replies are read from Drive, where they
+carry `action`, and never from the export.
+
+**Creating** a comment on a cell does not work, which is why there is no command for it. A new
+comment given an existing thread's anchor lands on that cell in both exports and is not shown on it
+in the Sheets interface; one given no anchor lands on A1 in both and shows no marker. It does appear
+in the Comments pane – headed "Originalinhalt gelöscht", *original content deleted*, which tells a
+reader something was removed rather than that the comment was never on a cell – and is not even
+how a real orphan is headed, which keeps its tab and quoted text. Google's Drive
+guide says as much – the editors "don't render comments created with the Drive API anchored to
+content; they treat these comments as unanchored comments" – and calls anchors immutable, so
+`comments.update` cannot move one either.
+
+## Smart chips
+
+Settled on 2026-09-14 on the scratch sheet: `chipRuns` **read** with a token holding no Drive
+scope, while **writing** a file chip without one is refused – `HTTP 403: The request scopes are not
+sufficient for reading from Drive` – and accepted with it, the placeholder `@` then replaced by the
+file's title.
+
 ## Three locale conventions in one call
 
 A `de_DE` workbook runs three different conventions at once, and two of them point opposite ways.
@@ -306,6 +406,7 @@ sheet.duplicates()                         # the deletes that would unstack them
 sheet.reset("Tab", "Andere")               # formatting a value overwrite leaves behind
 sheet.clear("Tab!A1:Z100", "Andere!A1:D9") # values only, one call for both
 sheet.cells("Tab!A1:C9", fields="sheets.data.rowData.values(effectiveValue)")
+sheet.comments()                           # every thread, with its tab and cell
 
 doc = Document(url_or_id, tab="t.0")
 doc.append("Text")

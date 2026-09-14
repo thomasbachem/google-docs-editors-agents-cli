@@ -341,6 +341,7 @@ class RetryingRequest(HttpRequest):
 
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 DOCS_SCOPE = "https://www.googleapis.com/auth/documents"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 
 
 def token_data():

@@ -5,7 +5,7 @@ pasting TSV through the clipboard, aiming at cells through the Name Box, expandi
 first so the write does not land in the wrong row. Those failures belong to the interface, not the
 task, and none of them exists through the API. These are the API.
 
-- `gsheets` – create, read and edit spreadsheets
+- `gsheets` – create, read and edit spreadsheets, and read and answer their comments
 - `gdocs` – create, read and edit documents
 
 Two of the Google Docs editors, over their official APIs, sharing one OAuth client and one token –
@@ -14,10 +14,11 @@ against the live API, not reasoned about, because a wrong claim costs an agent a
 write rather than a raised eyebrow. Slides and Forms are the same family and not built yet: the name
 is the family, not a claim about today.
 
-Neither holds a **Drive scope**, deliberately. They can change the contents of a file you name and
-nothing else – no deleting, moving, renaming or sharing, and no reaching a file you did not name.
-It is a property of the token, not a setting in the code, so it holds however wrong a
-caller goes, which is what makes these safe to point at a spreadsheet someone depends on.
+The token holds the full **Drive scope**, for comments: Google serves a spreadsheet's comment
+threads only through the Drive API. That scope is the whole Drive – the token itself could
+delete, move, rename or share any file in the account. No command here does any of it, but that
+is a property of the code, not of the token, so treat `token.json` as access to the account's
+Drive.
 
 Run either bare for its usage text – the command reference, naming the traps each API hides:
 locale parsing, link normalization, index shift. Both are also Python modules, the cheaper path for
@@ -39,9 +40,6 @@ that route – which is why the skill below installs the commands rather than fa
 
 What no connector gives you is any of this, and it is why the commands exist:
 
-- **A token that cannot reach Drive.** A connector is authorized against your Drive as a whole.
-  These hold no Drive scope at all, as above, so the worst a confused agent manages is changing a
-  file someone named.
 - **A shell wherever you are.** A connector runs inside one vendor's product. A command runs in CI,
   in cron, in a Makefile, and under whichever agent you are using this week.
 - **A script rather than a conversation.** Dozens of coordinated calls belong in a Python loop, not
@@ -57,18 +55,18 @@ Steps 1 and 2 are browser work in your own Google account, once per account – 
 reuses the same project and client. Steps 3 and 4 are shell, once per machine. Step 5 is once per
 checkout, where `token.json` lands.
 
-**1. A Google Cloud project with the two APIs enabled**
+**1. A Google Cloud project with the three APIs enabled**
 
 Create a project at https://console.cloud.google.com/projectcreate. On a Workspace account leave
 *Location* set to the organization rather than "No organization" – step 2 needs a project the domain
-owns. Then enable both APIs:
+owns. Then enable all three APIs:
 
 - https://console.cloud.google.com/apis/library/sheets.googleapis.com
 - https://console.cloud.google.com/apis/library/docs.googleapis.com
+- https://console.cloud.google.com/apis/library/drive.googleapis.com – for comments only; without
+  it everything else still works, and `auth.py` warns about it
 
-Leave Drive off – **Credentials** says why that absence is the point.
-
-A third API later goes in this same project: `gsheets whoami` prints its id, and the library for it
+Another API later goes in this same project: `gsheets whoami` prints its id, and the library for it
 is at `https://console.cloud.google.com/apis/library?project=<id>`. A missing one surfaces as
 `HTTP 403: … has not been used in project … before or it is disabled`, with the activation URL in
 the message.
@@ -204,11 +202,10 @@ that applies to every session.
 not – a copy for **another person** needs its own Google Cloud project and its own consent.
 
 Personal means per-person, not per-machine. Copying your own token into a cloud sandbox running your
-own agent is not sharing it, and is what lets Cowork run these at all. The scope list bounds that:
-`spreadsheets`, `documents`, `openid`, `userinfo.email` – a token that escapes can change the
-contents of files someone names and nothing else, so Drive-backed features fail by design: smart
-chips in Sheets return HTTP 403. Handing the pair to another person is the line, not moving them off
-this disk.
+own agent is not sharing it, and is what lets Cowork run these at all. The scope list says what is
+at stake: `spreadsheets`, `documents`, `drive`, `openid`, `userinfo.email` – a token that escapes
+reaches every file in the account's Drive, to read, delete or share. Handing the pair to another
+person is the line, not moving them off this disk.
 
 Where they move to differs by task. A Cowork task on the local VM mounts the folder from this
 disk; one running in the cloud copies what it uses into a container, and its approval dialog
@@ -223,4 +220,5 @@ says so. If you would rather the pair never left the machine, that dialog is whe
 Opens a browser consent and rewrites `token.json`, keeping a `.bak`. It refuses to overwrite when
 the consent lands on a different Google account than the token records, so an accidental sign-in
 as the wrong user cannot orphan the existing spreadsheets. Needed only when scopes change or the
-refresh token is revoked; expiry alone is handled automatically.
+refresh token is revoked; expiry alone is handled automatically. A token from before the Drive scope
+keeps working for everything else, and the comment commands say to run this once.
