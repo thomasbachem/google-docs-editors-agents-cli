@@ -351,6 +351,12 @@ check("each API is counted apart, as Google meters them",
       gauth.call_kind("https://docs.googleapis.com/v1/documents/X", "POST") == ("docs", "write"))
 check("an unparseable uri still counts as something",
       gauth.call_kind("", "POST") == ("api", "write"))
+# Drive has no host of its own, so its host's first label would count it as "www"
+check("Drive, served from www.googleapis.com, is counted by its path",
+      gauth.call_kind("https://www.googleapis.com/drive/v3/files/X/comments", "GET")
+      == ("drive", "read")
+      and gauth.call_kind("https://www.googleapis.com/drive/v3/files/X/comments/C/replies",
+                          "POST") == ("drive", "write"))
 
 def call(at, kind="read", size=0, pid=1):
     return gauth.Call(1000.0 + at, "sheets", kind, size, pid)

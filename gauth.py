@@ -172,8 +172,15 @@ def call_kind(uri, method):
     Reads and writes are counted apart because Google meters them apart, and
     the HTTP method decides it exactly: values.get is a GET, values.update a
     PUT, every batchUpdate a POST.
+
+    Sheets and Docs have a host each, Drive does not: it answers on
+    www.googleapis.com/drive/v3/…, so there the path names the API – or a run
+    reading comments reports its Drive calls as "www".
     """
-    api = (urlsplit(uri).hostname or "").split(".")[0] or "api"
+    parts = urlsplit(uri)
+    api = (parts.hostname or "").split(".")[0] or "api"
+    if api == "www":
+        api = parts.path.strip("/").split("/")[0] or api
     return api, ("read" if method.upper() in ("GET", "HEAD") else "write")
 
 
