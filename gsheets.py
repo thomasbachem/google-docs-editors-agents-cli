@@ -23,6 +23,9 @@ Usage:
                                               #   --duplicates to unstack them)
   gsheets link   <sheet> <A1range> <json>     # text + hyperlink per cell, downward:
                                               #   '[["Label","https://…"], …]'
+  gsheets note   <sheet> <A1range> <text>     # a note on every cell of the range ("" clears)
+  gsheets note-many <sheet> <json>            # several in ONE call:
+                                              #   '{"Tab!B7": "text", "Tab!C9:D10": ""}'
   gsheets reset  <sheet> <tab ...>            # clear formatting, notes, validations,
                                               #   rich text and merges over the WHOLE
                                               #   current grid, keeping values
@@ -126,7 +129,11 @@ existing thread's anchor, a new comment lands on that cell in both exports yet i
 not shown on it in the Sheets interface; given none, it has no marker at all, and
 the Comments pane heads it "original content deleted".
 Both measured, and Google documents it: the editors "treat these comments as
-unanchored". Reply, resolve and reopen work, and show there straight away.
+unanchored". What an agent CAN put visibly on a cell is a NOTE – `note` and
+`note-many`, on the Sheets scope alone – though a note is no thread: no replies,
+no resolving. Like a value, a note on a merged cell other than its top-left is
+discarded silently, measured, so both warn when a range reaches into a merge
+without its top-left. Reply, resolve and reopen work, and show there straight away.
 Google also takes a second resolve on a resolved thread, stacking another status
 line in it, so `resolve` and `reopen` read the state first and send nothing
 when it is already so.
@@ -479,6 +486,69 @@ def grid_start(s, ref, a1):
     else:
         found = tabs[0]
     return found["sheetId"], int(m.group(2)) - 1, col - 1
+
+
+def a1_cells(a1_range):
+    """An A1 cell range read without a call: (tab name or None, (row0, col0, row1, col1)).
+
+    Cells only – "Tab!B7" or "'Tab name'!B7:C9", the ends exclusive. A whole column
+    or row ("A:A") is refused rather than guessed at, since its end is whatever the
+    grid holds.
+    """
+    tab, sep, cells = a1_range.rpartition("!")
+    tab = tab.strip()
+    if sep and tab.startswith("'") and tab.endswith("'") and len(tab) > 1:
+        tab = tab[1:-1].replace("''", "'")
+    found = re.fullmatch(r"\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?", cells.strip())
+    if not found or int(found.group(2)) < 1 or (found.group(4) and int(found.group(4)) < 1):
+        raise ToolError(f"cannot read a cell range from {a1_range!r} – expected e.g. "
+                        f"\"'Tab'!B7\" or \"Tab!B7:C9\"")
+
+    def column(letters):
+        n = 0
+        for ch in letters.upper():
+            n = n * 26 + ord(ch) - 64
+        return n - 1
+
+    c0, r0 = column(found.group(1)), int(found.group(2)) - 1
+    c1, r1 = ((column(found.group(3)), int(found.group(4)) - 1) if found.group(3) else (c0, r0))
+    return (tab if sep else None), (min(r0, r1), min(c0, c1), max(r0, r1) + 1, max(c0, c1) + 1)
+
+
+def grid_range(tabs, a1_range):
+    """An A1 cell range as a GridRange, the tab resolved from `tabs` [{title, sheetId}].
+
+    No tab means the first one; see a1_cells() for what is read.
+    """
+    tab, (r0, c0, r1, c1) = a1_cells(a1_range)
+    if tab is None:
+        match = tabs[0]
+    else:
+        match = next((t for t in tabs if t["title"] == tab), None)
+        if match is None:
+            raise ToolError(f"no tab named {tab!r} – {', '.join(repr(t['title']) for t in tabs)}")
+    return {"sheetId": match["sheetId"], "startRowIndex": r0, "endRowIndex": r1,
+            "startColumnIndex": c0, "endColumnIndex": c1}
+
+
+def missed_merges(rng, merges):
+    """The merges a GridRange reaches into without covering their top-left cell.
+
+    Only a merge's top-left cell keeps what is written to it; a note on the rest
+    is discarded as silently as a value – measured, the call still counts the cell.
+    A range spanning the whole merge is fine, since its top-left is in it.
+    """
+    missed = []
+    for m in merges:
+        rows = max(rng["startRowIndex"], m.get("startRowIndex", 0)) < min(rng["endRowIndex"],
+                                                                         m.get("endRowIndex", 0))
+        cols = max(rng["startColumnIndex"], m.get("startColumnIndex", 0)) < min(
+            rng["endColumnIndex"], m.get("endColumnIndex", 0))
+        top_left = (rng["startRowIndex"] <= m.get("startRowIndex", 0) < rng["endRowIndex"] and
+                    rng["startColumnIndex"] <= m.get("startColumnIndex", 0) < rng["endColumnIndex"])
+        if rows and cols and not top_left:
+            missed.append(a1(m))
+    return missed
 
 
 def col_name(n):
@@ -1193,6 +1263,41 @@ class Client(gcomments.Threads):
         }}]}), self.dry)
         return len(rows)
 
+    def note(self, rng, text):
+        """A note on every cell of an A1 range, or "" to clear them – one call."""
+        return self.notes({rng: text})
+
+    def notes(self, mapping):
+        """Several notes in ONE call: {"Tab!B7": "text", "Tab!C9:D10": ""}.
+
+        A note is what an agent can put visibly ON a cell – a Drive comment made
+        through the API shows on none, see the module docstring. It is no thread,
+        though: no replies, no resolving. "" clears; `reset` clears every note on
+        a tab along with its formatting. Returns the number of cells touched.
+        """
+        if not isinstance(mapping, dict) or not mapping or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+            raise ToolError('note-many: expected text per range, as \'{"Tab!B7": "text", …}\' – '
+                            '"" clears a note')
+        for rng in mapping:
+            a1_cells(rng)       # a range that cannot be read costs no call
+        fields = "sheets(properties(sheetId,title),merges)"
+        sheets = self.service.get(spreadsheetId=self.id, fields=fields).execute()["sheets"]
+        tabs = [t["properties"] for t in sheets]
+        ranges = [grid_range(tabs, rng) for rng in mapping]
+        merges = {t["properties"]["sheetId"]: t.get("merges") or [] for t in sheets}
+        missed = [f"{given} ({', '.join(found)})" for given, r in zip(mapping, ranges)
+                  if (found := missed_merges(r, merges.get(r["sheetId"], [])))]
+        if missed:
+            print(f"WARNING: {len(missed)} range(s) reach into a merge without its top-left cell "
+                  f"({sample_of(missed)}). Only that cell keeps a note – the rest is discarded "
+                  f"silently, measured – so name the merge's first cell instead.", file=sys.stderr)
+        send(self.service.batchUpdate(spreadsheetId=self.id, body={"requests": [
+            {"repeatCell": {"range": r, "cell": {"note": text} if text else {}, "fields": "note"}}
+            for r, text in zip(ranges, mapping.values())]}), self.dry)
+        return sum((r["endRowIndex"] - r["startRowIndex"])
+                   * (r["endColumnIndex"] - r["startColumnIndex"]) for r in ranges)
+
     def delete_rows(self, tab, start, end):
         """Remove rows structurally, 1-based and inclusive – this shrinks the grid."""
         lo, hi = row_span(start, end, "delete-rows")
@@ -1314,7 +1419,7 @@ def dispatch():
     needed = {"cells": 1, "link": 2, "update": 2, "append": 2, "clear": 1,
               "delete-rows": 3, "batch": 1, "update-many": 1, "reset": 1,
               "insert-rows": 2, "group-rows": 3, "ungroup-rows": 3,
-              **gcomments.NEEDED}.get(cmd, 0)
+              "note": 2, "note-many": 1, **gcomments.NEEDED}.get(cmd, 0)
     if len(args) < needed:
         raise ToolError(f"{cmd}: expected {needed} argument(s) after <sheet>, got "
                         f"{len(args)} – run `gsheets` for usage")
@@ -1439,6 +1544,16 @@ def dispatch():
     elif cmd == "link":
         written = sheet.link(args[0], load_json(args[1], "link"))
         print(f"link: {written} cell(s) from {args[0]}")
+
+    elif cmd == "note":
+        text = " ".join(args[1:])
+        cells = sheet.note(args[0], text)
+        print(f"note: {'set on' if text else 'cleared from'} {cells} cell(s) in {args[0]}")
+
+    elif cmd == "note-many":
+        data = load_json(args[0], "note-many")
+        cells = sheet.notes(data)
+        print(f"note-many: {cells} cell(s) across {len(data)} range(s), in 1 request")
 
     elif cmd == "clear":
         cleared = sheet.clear(*args)

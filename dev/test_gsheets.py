@@ -1292,6 +1292,89 @@ DRIVE[0] = None
 run(["gsheets", "info", "ID"])
 check("a Sheets command never builds the Drive service", LAST_EXIT is None, str(LAST_EXIT)[:60])
 
+# --- notes: what an agent CAN put visibly on a cell -------------------------------
+print("\n--- notes ---")
+TABS = [{"title": "Tab1", "sheetId": 7}, {"title": "It's", "sheetId": 9}]
+check("a single cell becomes a one-cell GridRange",
+      gsheets.grid_range(TABS, "Tab1!B7") == {"sheetId": 7, "startRowIndex": 6, "endRowIndex": 7,
+                                              "startColumnIndex": 1, "endColumnIndex": 2})
+check("no tab means the first, and a backwards range is put the right way round",
+      gsheets.grid_range(TABS, "C9:B7") == {"sheetId": 7, "startRowIndex": 6, "endRowIndex": 9,
+                                            "startColumnIndex": 1, "endColumnIndex": 3})
+check("a quoted tab name with a doubled quote resolves",
+      gsheets.grid_range(TABS, "'It''s'!$A$1")["sheetId"] == 9)
+for bad, why in (("Tab1!A:A", "a whole column"), ("Tab1!A0", "row 0"),
+                 ("Nope!A1", "an unknown tab"), ("Tab1!", "no cell at all")):
+    kind, msg = direct(lambda bad=bad: gsheets.grid_range(TABS, bad))
+    check(f"{why} is refused, not guessed at", kind == "ToolError", f"{kind}: {str(msg)[:50]}")
+
+out, _ = run(["gsheets", "note", "ID", "Tab2!B2", "Bitte", "prüfen"])
+req = calls[-1][1]["body"]["requests"][0]["repeatCell"]
+check("note sets the note alone on the range, words joined",
+      req == {"range": {"sheetId": 8, "startRowIndex": 1, "endRowIndex": 2, "startColumnIndex": 1,
+                        "endColumnIndex": 2}, "cell": {"note": "Bitte prüfen"}, "fields": "note"},
+      str(req))
+check("note says what it did", out.strip() == "note: set on 1 cell(s) in Tab2!B2", out.strip())
+out, _ = run(["gsheets", "note", "ID", "Tab1!C4:D5", ""])
+req = calls[-1][1]["body"]["requests"][0]["repeatCell"]
+check("an empty note clears every cell of the range",
+      req["cell"] == {} and req["fields"] == "note" and "cleared from 4 cell(s)" in out,
+      out.strip())
+
+out, _ = run(["gsheets", "note-many", "ID", '{"Tab1!A1": "eins", "Tab2!B2:B3": "zwei"}'])
+check("note-many sends every range in one write after one metadata read",
+      [c[0] for c in calls] == ["get", "batchUpdate"]
+      and len(calls[-1][1]["body"]["requests"]) == 2, str([c[0] for c in calls]))
+check("note-many counts cells, not ranges", "3 cell(s) across 2 range(s), in 1 request" in out,
+      out.strip())
+for payload in ('["Tab1!A1", "x"]', '{"Tab1!A1": 5}', '{}'):
+    run(["gsheets", "note-many", "ID", payload])
+    check(f"note-many refuses {payload}, naming itself",
+          isinstance(LAST_EXIT, str) and LAST_EXIT.startswith("note-many: expected")
+          and not any(sent), str(LAST_EXIT)[:50])
+run(["gsheets", "note", "ID", "Tab1!A:A", "x"])
+check("a range note cannot read is refused before the sheet is read",
+      isinstance(LAST_EXIT, str) and "cannot read a cell range" in LAST_EXIT and not calls,
+      f"{str(LAST_EXIT)[:40]} {calls[:1]}")
+out, _ = run(["gsheets", "note", "--dry-run", "ID", "Tab1!A1", "x"])
+check("note honours --dry-run",
+      json.loads(out)["body"]["requests"][0]["repeatCell"]["cell"] == {"note": "x"}
+      and not any(sent), out[:60])
+for cmd, need in (("note", 2), ("note-many", 1)):
+    run(["gsheets", cmd, "ID"])
+    check(f"{cmd} reports missing arguments",
+          isinstance(LAST_EXIT, str) and f"expected {need} argument" in LAST_EXIT,
+          str(LAST_EXIT)[:50])
+
+
+class Merged(Sheets):
+    """One merge, E2:F2 – measured: a note on F2 alone lands nowhere."""
+
+    def get(self, **kw):
+        calls.append(("get", kw))
+        return Exec({"sheets": [{"properties": {"title": "Tab1", "sheetId": 7}, "merges": [
+            {"sheetId": 7, "startRowIndex": 1, "endRowIndex": 2,
+             "startColumnIndex": 4, "endColumnIndex": 6}]}]})
+
+
+merged = gsheets.Client("ID", service=Merged())
+for rng, warns, why in (("Tab1!F2", True, "a covered cell alone"),
+                        ("Tab1!D1:F3", False, "a range holding the merge's top-left"),
+                        ("Tab1!E2", False, "the top-left itself"),
+                        ("Tab1!A1", False, "a cell nowhere near it")):
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(io.StringIO()):
+        merged.note(rng, "x")
+    check(f"{why} {'warns' if warns else 'stays silent'} about the merge",
+          ("WARNING" in buf.getvalue()) is warns and (not warns or "E2:F2" in buf.getvalue()),
+          buf.getvalue().strip()[:70])
+calls.clear()
+with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+    merged.note("Tab1!F2", "x")
+check("the merge check rides on the tab read, costing no call of its own",
+      [c[0] for c in calls] == ["get", "batchUpdate"] and "merges" in calls[0][1]["fields"],
+      str([c[0] for c in calls]))
+
 # A token from before the Drive scope must be told the fix, not handed Google's 403 –
 # and must not have built anything on the way there.
 fd, old_token = tempfile.mkstemp(suffix=".json")

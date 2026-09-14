@@ -100,8 +100,8 @@ In Sheets:
   `reopen` take the id it prints. Trust a cell printed bare; one followed by a remark in
   brackets is in doubt, and a thread whose row or column was deleted says so rather than
   pointing at A1. Nothing creates a comment on a cell - Google does not show one made that
-  way - so reply to a thread already there. A comment moves only with its cell - a
-  `cutPaste` through `batch` carries both.
+  way - so use `note` to put a remark on the cell itself, or reply to a thread already
+  there. A comment moves only with its cell - a `cutPaste` through `batch` carries both.
 
 In Docs:
 

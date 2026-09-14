@@ -234,6 +234,15 @@ guide says as much – the editors "don't render comments created with the Drive
 content; they treat these comments as unanchored comments" – and calls anchors immutable, so
 `comments.update` cannot move one either.
 
+What does show on a cell is a **note**, written through the Sheets API with `repeatCell` and
+`fields: "note"` – `gsheets note` for one range, `note-many` for several in one call, `""` to
+clear. Measured on the scratch sheet, the single-cell, multi-line and merge notes also checked by
+hovering: a single cell, a range and a multi-line note all land, and a note on the covered half
+of a merge (F2 of E2:F2) is dropped while the call still counts the cell – the same silent
+discard a value gets. Named on the merge's top-left, or across the whole merge, it lands on the
+top-left. Both commands read the tab's merges with the tab ids and warn on the first case. A note
+is not a thread: nothing replies to it or resolves it.
+
 ## Smart chips
 
 Settled on 2026-09-14 on the scratch sheet: `chipRuns` **read** with a token holding no Drive
@@ -406,6 +415,7 @@ sheet.duplicates()                         # the deletes that would unstack them
 sheet.reset("Tab", "Andere")               # formatting a value overwrite leaves behind
 sheet.clear("Tab!A1:Z100", "Andere!A1:D9") # values only, one call for both
 sheet.cells("Tab!A1:C9", fields="sheets.data.rowData.values(effectiveValue)")
+sheet.notes({"Tab!B7": "Prüfen", "Tab!C9": ""})  # several notes in one call, "" clears
 sheet.comments()                           # every thread, with its tab and cell
 
 doc = Document(url_or_id, tab="t.0")
