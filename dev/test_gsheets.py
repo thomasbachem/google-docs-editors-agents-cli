@@ -601,6 +601,14 @@ run(["gsheets", "link", "ID", "A1", '[["Nur Text",""]]'])
 req = calls[-1][1]["body"]["requests"][0]["updateCells"]
 check("link with no URL clears the run", req["rows"][0]["values"][0]["textFormatRuns"] == [])
 
+run(["gsheets", "link", "ID", "Tab1!A:A", '[["a", "b"]]'])
+check("link refuses a range it cannot read before reading the sheet, quoting it whole",
+      isinstance(LAST_EXIT, str) and "'Tab1!A:A'" in LAST_EXIT and not calls,
+      f"{str(LAST_EXIT)[:50]} {calls[:1]}")
+run(["gsheets", "link", "ID", "Tab1!A1", "[5]"])
+check("link refuses pairs that are not lists in one line, not a traceback",
+      isinstance(LAST_EXIT, str) and LAST_EXIT.startswith("link: expected"), str(LAST_EXIT)[:50])
+
 # two short dot-separated groups are a date to Sheets ("1.2.3" -> 01.02.2003),
 # so warning about them would be noise just like a full date
 _, err = run(["gsheets", "update", "ID", "A1", '[["1.2.3"],["9.9.9"],["31.12.99"]]'])
@@ -733,6 +741,32 @@ check("read always returns range-tagged blocks",
       all("range" in b for b in client.read("A!A1", "B!B1")))
 check("rows returns just the grid", client.rows("A!A1") == [["x"], [], ["y"]])
 check("objects returns a dict keyed by tab", set(client.objects()) == {"Tab1", "Leer"})
+
+
+class Quoted(Sheets):
+    """Tab names holding a quote, which an A1 reference doubles – as `comments` prints them."""
+
+    def get(self, **kw):
+        calls.append(("get", kw))
+        return Exec({"sheets": [{"properties": {"title": "Kai's Plan", "sheetId": 5}},
+                                {"properties": {"title": "'Zitat'", "sheetId": 6}}]})
+
+
+quoted = gsheets.Client("ID", service=Quoted())
+for rng, start in ((gsheets.quoted_tab("Kai's Plan") + "!B2",
+                    {"sheetId": 5, "rowIndex": 1, "columnIndex": 1}),
+                   (gsheets.quoted_tab("'Zitat'") + "!C3:C",
+                    {"sheetId": 6, "rowIndex": 2, "columnIndex": 2})):
+    kind, _ = direct(lambda rng=rng: quoted.link(rng, [["a", "https://example.com/q"]]))
+    got = calls[-1][1].get("body", {}).get("requests", [{}])[0].get("updateCells", {}).get("start")
+    check(f"link finds the tab in {rng}, its doubled quotes undone", kind == "ok" and got == start,
+          f"{kind}: {got}")
+check("quoted_tab doubles a quote inside a tab name",
+      gsheets.quoted_tab("Kai's Plan") == "'Kai''s Plan'", gsheets.quoted_tab("Kai's Plan"))
+calls.clear()
+quoted.read()
+check("reading a first tab named with a quote asks for it quoted, the quote doubled",
+      calls[-1][1].get("range") == "'Kai''s Plan'", str(calls[-1][1].get("range")))
 
 # --- row numbers, dimension groups and rooted field masks ---------------------
 # All three came from an agent driving the tool from another machine. Two of them

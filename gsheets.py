@@ -465,35 +465,23 @@ def grid_start(s, ref, a1):
     """Resolve the first cell of an A1 range to (sheetId, rowIndex, columnIndex).
 
     updateCells takes a start coordinate rather than a range, so only the first
-    cell has to be parsed.
+    cell has to be parsed – "Tab!B2:B" is as good as "Tab!B2".
     """
     tab, sep, cells = a1.rpartition("!")
-    tab = tab.strip().strip("'") if sep else ""
-    m = re.match(r"^([A-Za-z]+)(\d+)$", cells.split(":")[0].strip())
-    if not m:
-        raise ToolError(f"cannot parse a start cell from {a1!r} – "
-                        f"expected e.g. \"'Tab'!B2\"")
-    col = 0
-    for ch in m.group(1).upper():
-        col = col * 26 + (ord(ch) - 64)
+    first = f"{tab}{sep}{cells.split(':')[0]}"
+    a1_cells(first, shown=a1)   # a range that cannot be read costs no call
     tabs = [p["properties"] for p in
             s.get(spreadsheetId=ref, fields="sheets.properties(sheetId,title)").execute()["sheets"]]
-    if tab:
-        found = next((p for p in tabs if p["title"] == tab), None)
-        if found is None:
-            raise ToolError(f"no tab named {tab!r} – "
-                            f"{', '.join(repr(p['title']) for p in tabs)}")
-    else:
-        found = tabs[0]
-    return found["sheetId"], int(m.group(2)) - 1, col - 1
+    found = grid_range(tabs, first)
+    return found["sheetId"], found["startRowIndex"], found["startColumnIndex"]
 
 
-def a1_cells(a1_range):
+def a1_cells(a1_range, shown=None):
     """An A1 cell range read without a call: (tab name or None, (row0, col0, row1, col1)).
 
     Cells only – "Tab!B7" or "'Tab name'!B7:C9", the ends exclusive. A whole column
     or row ("A:A") is refused rather than guessed at, since its end is whatever the
-    grid holds.
+    grid holds. `shown` is what the refusal quotes, when the caller cut the range.
     """
     tab, sep, cells = a1_range.rpartition("!")
     tab = tab.strip()
@@ -501,7 +489,7 @@ def a1_cells(a1_range):
         tab = tab[1:-1].replace("''", "'")
     found = re.fullmatch(r"\$?([A-Za-z]+)\$?(\d+)(?::\$?([A-Za-z]+)\$?(\d+))?", cells.strip())
     if not found or int(found.group(2)) < 1 or (found.group(4) and int(found.group(4)) < 1):
-        raise ToolError(f"cannot read a cell range from {a1_range!r} – expected e.g. "
+        raise ToolError(f"cannot read a cell range from {shown or a1_range!r} – expected e.g. "
                         f"\"'Tab'!B7\" or \"Tab!B7:C9\"")
 
     def column(letters):
@@ -1045,7 +1033,7 @@ class Client(gcomments.Threads):
         Always a list of {range, values}, whatever the count – the CLI's
         single-range shortcut is a presentation choice, not this one.
         """
-        wanted = list(ranges) or [f"'{self.first_tab()}'"]
+        wanted = list(ranges) or ["'" + self.first_tab().replace("'", "''") + "'"]
         if len(wanted) == 1:
             got = self.service.values().get(spreadsheetId=self.id, range=wanted[0]).execute()
             # The API's own range, not the request's: a bare tab name comes back
@@ -1244,6 +1232,9 @@ class Client(gcomments.Threads):
 
     def link(self, rng, pairs):
         """Display text plus a hyperlink per cell, downward from rng."""
+        if not isinstance(pairs, list) or not all(isinstance(p, list) for p in pairs):
+            raise ToolError('link: expected [["text", "url"], …], one pair per cell downward – '
+                            '"" as the url for plain text')
         gid, row0, col0 = grid_start(self.service, self.id, rng)
         rows = []
         for pair in pairs:
