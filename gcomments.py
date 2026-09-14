@@ -1,10 +1,11 @@
-"""Comment threads, the part that does not depend on where a comment sits.
+"""Comment threads, the part gsheets and gdocs share.
 
-A comment on a spreadsheet lives in the Drive API, not in the Sheets one, and
-Drive does not say which cell it is on: its anchor is an opaque id the Sheets API
-never mentions. gsheets works the cell out from exports of its own. What does
-not depend on that lives here – listing the threads, their fields, answering,
-resolving and reopening, and how a thread prints.
+A comment on a spreadsheet or a document lives in the Drive API, not in the
+Sheets or Docs one, and Drive does not say where on the file it sits: its anchor
+is an opaque id neither of the other APIs mentions. Each CLI works the place out
+from an export in a format of its own. What is the same for both lives here –
+listing the threads, their fields, answering, resolving and reopening, and how
+a thread prints.
 """
 
 import html
@@ -37,13 +38,13 @@ def drive_api():
 def match_threads(comments, roots):
     """The export entry each Drive comment is, matched on its creation second.
 
-    The XLSX export writes Drive's `2026-09-07T14:21:18.389Z` truncated to the
-    second, and its own ids are no help. Text decides only where two threads
-    share a second, in Drive or in the export; it cannot lead, since what Drive
-    and an export each make of a comment's text is theirs to differ on. A tie in
-    Drive matters as much as one in the export: a thread the export leaves out
-    and an open one made in the same second meet a single entry, which is the
-    open one's.
+    The XLSX and DOCX exports both write Drive's `2026-09-07T14:21:18.389Z`
+    truncated to the second, and their own ids are no help. Text decides only
+    where two threads share a second, in Drive or in the export; it cannot
+    lead, since what Drive and an export each make of a comment's text is
+    theirs to differ on. A tie in Drive matters as much as one in the export: a
+    DOCX export leaves out a thread whose text was deleted, so it and an open
+    thread made in the same second meet a single entry, which is the open one's.
     An entry two threads would both take goes to neither. Returns a list
     parallel to `comments`, None where nothing matched.
     """

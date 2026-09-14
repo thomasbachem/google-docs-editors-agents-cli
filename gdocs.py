@@ -16,6 +16,11 @@ Usage:
   gdocs format  <doc> <start> <end> <json>    # text style, e.g. '{"bold":true}' or
                                               #   '{"link":{"url":"https://…"}}'
   gdocs batch   <doc> <json>                  # raw batchUpdate requests (escape hatch)
+  gdocs comments <doc>                        # open comment threads, each with its text
+                                              #   and index range (--all adds resolved, --json)
+  gdocs reply   <doc> <comment-id> <text>     # answer a thread
+  gdocs resolve <doc> <comment-id> [text]     # mark it resolved, optionally saying why
+  gdocs reopen  <doc> <comment-id> [text]     # and back
 
 Without a subprocess – every command is a `Document` method:
 
@@ -74,24 +79,70 @@ the only figure a per-minute limit compares against – plus the payload sent.
 Set it to a PATH and every process appends there instead, which is what makes
 the peak true for a build running several at once; remove the file between runs.
 
+Comments – the threads in the side panel – live in the Drive API, which does
+not say where in the document one sits: its anchor is an id ("kix.yezgapnvz1yj")
+the Docs API never mentions. So `comments` reads a DOCX export, which marks
+where each open thread starts and ends, joins it to Drive's thread by creation
+second, and lines the export's paragraphs up with the document's to turn that
+into an index range and a tab – ready for `delete`, `format` or `--tab`. It
+prints the text the thread is on now, and what it was made on where that
+differs: Drive's quote is a snapshot. An image, footnote mark or page break in
+that text reads as U+FFFC, one character for its one index. Measured: the range
+follows a paragraph inserted above it, keeps out text inserted right before it,
+stays on the new text when `replace` rewrites the whole passage, and ignores a
+reply. Two things the export cannot say:
+  • A thread whose text was DELETED is still open in Drive, and absent from the
+    export – the Docs pane heads it "original content deleted". `comments`
+    says its text was deleted.
+  • A RESOLVED thread is absent from the export too, so where it was is
+    unknown; only what it was made on is printed.
+Three calls per listing, one for a document with no open thread. No command
+CREATES a comment: Google documents that the editors treat one made through
+the API as unanchored, and measured on a spreadsheet, the Comments pane then
+heads it "original content deleted".
+
 There is no Markdown or HTML import: text goes in plain and structure is
 applied afterwards with `style`/`format`. A converting Drive upload could do it
 in one step and is not built. The shared token holds a Drive scope, for
-spreadsheet comments, yet no command here deletes, moves, renames or shares a file.
+comments, yet no command here deletes, moves, renames or shares a file.
 """
 
+import bisect
+import difflib
+import io
 import json
 import re
 import sys
+import zipfile
+from collections import Counter
+from xml.etree import ElementTree
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+import gcomments
 from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, account,
                    as_int, credentials, http_error_message, load_json, project,
                    require_scope, send, split_flags)
 
 DOC_URL = "https://docs.google.com/document/d/{}/edit"
+
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+W14 = "{http://schemas.microsoft.com/office/word/2010/wordml}"
+W15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
+WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+# Formatting and table properties, whose children reuse names like w:tab (a tab stop)
+DOCX_PROPERTIES = {W + name for name in ("pPr", "rPr", "sectPr", "tblPr", "trPr", "tcPr",
+                                         "tblGrid")}
+# An element holding one index and no text – an inline image, a footnote mark, a page
+# break – as a character on both sides, so a position just before or after one maps
+# exactly. The export writes them where they stand: w:drawing around wp:inline,
+# w:footnoteReference and w:br type="page" (measured). A soft line break is
+# w:br type="textWrapping", and a person chip a link reading the person's name, which is
+# what paragraphs_of() takes from the Docs API too (both measured).
+OBJECT = "\ufffc"
+API_OBJECTS = ("inlineObjectElement", "footnoteReference", "pageBreak", "columnBreak")
 
 
 def doc_id(ref):
@@ -233,7 +284,313 @@ def warn_index_order(requests):
     )
 
 
-class Document:
+def docx_comments(data):
+    """The paragraphs of a DOCX export, and each comment with where it starts and ends.
+
+    A position is (paragraph number, characters into its text). Paragraphs are
+    counted in document order, table cells included; the export adds one per
+    tab, styled Title and holding the tab's name, which the document itself does
+    not have – the numbers of the Title-styled paragraphs come back too, so the
+    tabs can be told apart. Of the formats Google exports, this one marks both
+    ends of a comment and dates it to the second; it leaves resolved threads
+    out, as the ODT and plain-text exports do (measured). A reply is an entry of
+    its own, marked as one. Returns (paragraphs, entries, titled).
+    """
+    zipped = zipfile.ZipFile(io.BytesIO(data))
+    names = set(zipped.namelist())
+    paragraphs, starts, ends, pending, titled = [], {}, {}, [], set()
+
+    def walk(node, inside):
+        for el in node:
+            if el.tag in DOCX_PROPERTIES:
+                continue
+            if el.tag == W + "p":
+                paragraphs.append("")
+                style = el.find(f"{W}pPr/{W}pStyle")
+                if style is not None and style.get(W + "val") == "Title":
+                    titled.add(len(paragraphs) - 1)
+                # a range opened between paragraphs starts at the next one
+                starts.update((cid, (len(paragraphs) - 1, 0)) for cid in pending)
+                pending.clear()
+                walk(el, True)
+            elif el.tag in (W + "t", W + "delText") and inside:
+                paragraphs[-1] += el.text or ""
+            elif el.tag == W + "tab" and inside:
+                paragraphs[-1] += "\t"
+            elif el.tag == W + "br" and inside:
+                # a line break is \u000b in the Docs API; a page break is an element of its own
+                paragraphs[-1] += OBJECT if el.get(W + "type") in ("page", "column") else "\u000b"
+            elif el.tag == W + "drawing" and inside:
+                # a floating image holds no index in the Docs API; only an inline one does
+                paragraphs[-1] += OBJECT if el.find(WP + "inline") is not None else ""
+            elif el.tag == W + "footnoteReference" and inside:
+                paragraphs[-1] += OBJECT
+            elif el.tag == W + "commentRangeStart":
+                if inside:
+                    starts[el.get(W + "id")] = (len(paragraphs) - 1, len(paragraphs[-1]))
+                else:
+                    pending.append(el.get(W + "id"))
+            elif el.tag == W + "commentRangeEnd":
+                ends[el.get(W + "id")] = ((len(paragraphs) - 1, len(paragraphs[-1]))
+                                          if paragraphs else (0, 0))
+            else:
+                walk(el, inside)
+
+    walk(ElementTree.fromstring(zipped.read("word/document.xml")), False)
+    parents = {}
+    if "word/commentsExtended.xml" in names:
+        for ex in ElementTree.fromstring(zipped.read("word/commentsExtended.xml")).iter(
+                W15 + "commentEx"):
+            parents[ex.get(W15 + "paraId")] = ex.get(W15 + "paraIdParent")
+    entries = []
+    if "word/comments.xml" in names:
+        for item in ElementTree.fromstring(zipped.read("word/comments.xml")).iter(W + "comment"):
+            cid, paras = item.get(W + "id"), item.findall(W + "p")
+            entries.append({
+                # "2026-09-14T17:51:07Z" – Drive's createdTime, truncated to the second
+                "created": (item.get(W + "date") or "")[:19],
+                "text": "\n".join("".join(t.text or "" for t in p.iter(W + "t")) for p in paras),
+                "reply": any(parents.get(p.get(W14 + "paraId")) for p in paras),
+                "start": starts.get(cid), "end": ends.get(cid)})
+    return paragraphs, entries, titled
+
+
+def paragraphs_of(doc):
+    """Every paragraph in document order, tab after tab, table cells included.
+
+    Each as (tabId, tab title, startIndex, endIndex, pieces), a piece being one
+    element's (text as an export shows it, startIndex, whether it is a text run):
+    what turns characters into an export's paragraph back into an index.
+    """
+    found = []
+
+    def walk(content, tab, title):
+        for el in content or []:
+            if "paragraph" in el:
+                pieces = []
+                for e in el["paragraph"].get("elements", []):
+                    at = e.get("startIndex", 0)
+                    if "textRun" in e:
+                        pieces.append((e["textRun"].get("content", ""), at, True))
+                    elif "person" in e:
+                        pieces.append((e["person"].get("personProperties", {}).get("name", ""),
+                                       at, False))
+                    elif "richLink" in e:
+                        pieces.append((e["richLink"].get("richLinkProperties", {}).get("title", ""),
+                                       at, False))
+                    elif any(kind in e for kind in API_OBJECTS):
+                        pieces.append((OBJECT, at, False))
+                    else:
+                        pieces.append(("", at, False))
+                # the paragraph's own newline is no text an export shows
+                if pieces and pieces[-1][2] and pieces[-1][0].endswith("\n"):
+                    pieces[-1] = (pieces[-1][0][:-1], pieces[-1][1], True)
+                found.append((tab, title, el.get("startIndex", 0), el.get("endIndex", 0), pieces))
+            elif "table" in el:
+                for row in el["table"].get("tableRows", []):
+                    for cell in row.get("tableCells", []):
+                        walk(cell.get("content"), tab, title)
+            elif "tableOfContents" in el:
+                walk(el["tableOfContents"].get("content"), tab, title)
+
+    for tab, title, content in tabs_of(doc):
+        walk(content, tab, title)
+    return found
+
+
+def index_at(pieces, offset):
+    """The index `offset` characters into a paragraph as an export shows it."""
+    for text, at, is_text in pieces:
+        if is_text and offset <= len(text):
+            return at + utf16_len(text[:offset])
+        if not is_text and offset < len(text):
+            return at
+        offset -= len(text)
+    return None
+
+
+def pair_paragraphs(theirs, ours):
+    """Which of the document's paragraphs each exported one is: (exact, near) index maps.
+
+    `exact` pairs paragraphs that read the same; `near` pairs, one to one and in
+    place, the paragraphs of a stretch that reads differently on both sides. A
+    paragraph occurring once on each side pins the two lists together first –
+    in order, the longest run of them that agrees – and only the gaps between
+    those need more: difflib over a whole document of many empty paragraphs
+    slows down quadratically, 25s for 12000 paragraphs, measured.
+
+    A gap of the same length on both sides is paired by position – what the
+    export spells differently, a link's title say, is then not taken for a
+    neighbour that happens to read like it. A gap of different lengths goes
+    through difflib, keeping only pairs whose text occurs once in that gap on
+    each side: with a text there twice, which copy is which is a guess.
+    """
+    exact, near = {}, {}
+    once_theirs, once_ours = Counter(theirs), Counter(ours)
+    at_ours = {text: j for j, text in enumerate(ours) if once_ours[text] == 1}
+    candidates = [(i, at_ours[text]) for i, text in enumerate(theirs)
+                  if once_theirs[text] == 1 and text in at_ours]
+    # the longest run of candidates rising on both sides, by patience sorting
+    tops, links, back = [], [], {}
+    for n, (_, j) in enumerate(candidates):
+        k = bisect.bisect_left(tops, j)
+        if k == len(tops):
+            tops.append(j)
+            links.append(n)
+        else:
+            tops[k], links[k] = j, n
+        back[n] = links[k - 1] if k else None
+    pins, n = [], links[-1] if links else None
+    while n is not None:
+        pins.append(candidates[n])
+        n = back[n]
+    i0 = j0 = 0
+    for i1, j1 in [*reversed(pins), (len(theirs), len(ours))]:
+        if i1 - i0 == j1 - j0:
+            for i, j in zip(range(i0, i1), range(j0, j1)):
+                (exact if theirs[i] == ours[j] else near)[i] = j
+        else:
+            gap_theirs, gap_ours = Counter(theirs[i0:i1]), Counter(ours[j0:j1])
+            matcher = difflib.SequenceMatcher(None, theirs[i0:i1], ours[j0:j1], autojunk=False)
+            for tag, a0, a1, b0, b1 in matcher.get_opcodes():
+                if tag == "equal":
+                    exact.update((i0 + a, j0 + b) for a, b in zip(range(a0, a1), range(b0, b1))
+                                 if gap_theirs[theirs[i0 + a]] == gap_ours[ours[j0 + b]] == 1)
+                elif tag == "replace" and a1 - a0 == b1 - b0:
+                    near.update(zip(range(i0 + a0, i0 + a1), range(j0 + b0, j0 + b1)))
+        if i1 < len(theirs):
+            exact[i1] = j1
+        i0, j0 = i1 + 1, j1 + 1
+    return exact, near
+
+
+def tab_stretches(theirs, titled, ours):
+    """The export's paragraphs split by tab: [(their numbers, our numbers)] per tab.
+
+    Each tab's part of the export opens with a Title paragraph holding its name,
+    so pairing tab by tab keeps a run of empty paragraphs at the end of one tab
+    from being paired with those at the start of the next. A tab's title is
+    looked for where the paragraph counts put it; failing that, the Title
+    paragraph of that name nearest there is taken, so one of the document's own
+    that happens to carry the next tab's name earlier on does not cut in. Two
+    equally near, or none, and the whole document is one stretch. So is a
+    document of one tab – how it exports is not measured – less the title
+    paragraph it may open with.
+    """
+    tabs = []
+    for j, (tab, title, *_) in enumerate(ours):
+        if not tabs or tabs[-1][0] != tab:
+            tabs.append((tab, title, []))
+        tabs[-1][2].append(j)
+    whole = [(list(range(len(theirs))), list(range(len(ours))))]
+    if len(tabs) < 2:
+        if tabs and tabs[0][1] and 0 in titled and theirs and theirs[0] == tabs[0][1]:
+            return [(list(range(1, len(theirs))), list(range(len(ours))))]
+        return whole
+    opens, at = [], 0
+    for k, (_, title, mine) in enumerate(tabs):
+        guess = opens[-1] + 1 + len(tabs[k - 1][2]) if opens else 0
+        found = sorted((abs(i - guess), i) for i in range(at, len(theirs))
+                       if i in titled and theirs[i] == title)
+        if not found or (len(found) > 1 and found[0][0] == found[1][0]):
+            return whole
+        opens.append(found[0][1])
+        at = found[0][1] + 1
+    return [(list(range(opens[k] + 1, opens[k + 1] if k + 1 < len(opens) else len(theirs))), mine)
+            for k, (_, _, mine) in enumerate(tabs)]
+
+
+def place_doc_comments(comments, exported, doc):
+    """Drive's threads, each with the tab, index range and text the export puts it on.
+
+    `exported` is docx_comments()' result, or None when no export was read;
+    `doc` the document with its tabs' content. `placement` says what is known:
+      text       found in the export, its range turned into indices exactly
+      paragraph  found, but its paragraphs read differently in the export than in
+                 the document – an element not measured, a rich link say – so the
+                 range is theirs, whole; the text it is on has to be in them, or it
+                 is unknown
+      deleted    open, yet absent from the export: its text was deleted, which is
+                 how that has shown (measured) and what the Docs pane says
+      resolved   a resolved thread, which no export carries – place unknown
+      none       no anchor – a comment on the file, not on its text
+      unknown    no export was read, or it could not be matched
+    """
+    paragraphs, entries, titled = exported or ([], [], set())
+    roots = [e for e in entries if not e["reply"]]
+    ours = paragraphs_of(doc) if doc else []
+    exact, near = {}, {}
+    for mine_theirs, mine_ours in tab_stretches(paragraphs, titled, ours):
+        pairs = pair_paragraphs([paragraphs[i] for i in mine_theirs],
+                                ["".join(p[0] for p in ours[j][4]) for j in mine_ours])
+        for found, into in zip(pairs, (exact, near)):
+            into.update((mine_theirs[i], mine_ours[j]) for i, j in found.items())
+
+    # a resolved thread is never in the export (measured), so it competes for no entry
+    unresolved = [c for c in comments if not c.get("resolved")]
+    found = dict(zip(map(id, unresolved), gcomments.match_threads(unresolved, roots)))
+    matches = [found.get(id(c)) for c in comments]
+    claimed = {id(m) for m in matches if m is not None}
+    placed = []
+    for c, match in zip(comments, matches):
+        tab_id = tab = start = end = passage = None
+        if not c.get("anchor"):
+            placement = "none"
+        elif c.get("resolved"):
+            placement = "resolved"
+        elif match is None:
+            second = (c.get("createdTime") or "")[:19]
+            # an entry of its second that no thread claimed may be this one, told apart by
+            # nothing but a text the export spells its own way – not an absence
+            placement = ("deleted" if exported is not None and not any(
+                e["created"] == second and id(e) not in claimed for e in roots) else "unknown")
+        elif match["start"] is None or match["end"] is None:
+            placement = "unknown"
+        else:
+            (p0, o0), (p1, o1) = match["start"], match["end"]
+            passage = (paragraphs[p0][o0:o1] if p0 == p1 else "\n".join(
+                [paragraphs[p0][o0:], *paragraphs[p0 + 1:p1], paragraphs[p1][:o1]]))
+            j0, j1 = exact.get(p0), exact.get(p1)
+            if j0 is not None and j1 is not None and ours[j0][0] == ours[j1][0] and None not in (
+                    first := index_at(ours[j0][4], o0), last := index_at(ours[j1][4], o1)):
+                placement, (tab_id, tab), start, end = "text", ours[j0][:2], first, last
+            else:
+                j0, j1 = exact.get(p0, near.get(p0)), exact.get(p1, near.get(p1))
+                lines = passage.split("\n")
+                # a pairing by position alone proves nothing, so the text has to be there
+                if (passage and j0 is not None and j1 is not None and ours[j0][0] == ours[j1][0]
+                        and lines[0] in "".join(p[0] for p in ours[j0][4])
+                        and lines[-1] in "".join(p[0] for p in ours[j1][4])):
+                    placement, (tab_id, tab) = "paragraph", ours[j0][:2]
+                    start, end = ours[j0][2], ours[j1][3]
+                else:
+                    placement = "unknown"
+        placed.append({"id": c.get("id"), "tab": tab, "tab_id": tab_id, "start": start,
+                       "end": end, "placement": placement, "passage": passage,
+                       **gcomments.record(c)})
+    return placed
+
+
+def comment_lines(c):
+    """One thread as the `comments` command prints it."""
+    at = f"{c['tab']!r} (--tab={c['tab_id']}) " if c["tab_id"] else ""
+    where = {"text": f"{at}[{c['start']}, {c['end']})",
+             "paragraph": f"{at}[{c['start']}, {c['end']}) (its paragraphs – the exact range "
+                          f"could not be confirmed)",
+             "deleted": "(its text was deleted)",
+             "resolved": "(place unknown – a resolved thread leaves the export)",
+             "none": "(no text – a comment on the file)",
+             "unknown": "(place unknown)"}[c["placement"]]
+    if c["passage"] is not None:
+        on = f"on {c['passage']!r}"
+        remark = on + (f", made on {c['quoted']!r}" if c["quoted"] and c["quoted"] != c["passage"]
+                       else "")
+    else:
+        remark = f"made on {c['quoted']!r}" if c["quoted"] else ""
+    return gcomments.thread_lines(where, c, remark)
+
+
+class Document(gcomments.Threads):
     """The commands as methods, so they can be used without a subprocess.
 
     Every guard the CLI applies applies here – the retry, the tab resolution,
@@ -249,13 +606,14 @@ class Document:
     or exits. `tab` scopes every call to one tab, as --tab does.
     """
 
-    def __init__(self, doc, service=None, tab="", dry=False):
+    def __init__(self, doc, service=None, tab="", dry=False, drive=None):
         self.id = doc_id(doc)
         if not self.id:
             raise ToolError("no document id given – pass a docs.google.com URL or a bare id")
         self.service = service or api()
         self.tab = tab
         self.dry = dry
+        self._drive = drive
 
     def api(self):
         """The service this drives, for anything these methods do not cover.
@@ -346,6 +704,25 @@ class Document:
             documentId=self.id, body={"requests": requests}), self.dry)
         return result.get("replies", [])
 
+    def comments(self):
+        """Every comment thread, open and resolved, with its tab, index range and text.
+
+        Three calls for up to 100 threads: the threads, a DOCX export to place
+        them and one read of the document to turn the export's positions into
+        indices. The export is skipped when no thread is open and anchored – it
+        leaves resolved ones out anyway – and the read when the export holds
+        none. Every tab at once, whatever `tab` this Document was given. See
+        place_doc_comments() for what each placement means.
+        """
+        found = self.threads()
+        exported = doc = None
+        if any(c.get("anchor") and not c.get("resolved") for c in found):
+            exported = self._exported("DOCX", DOCX, docx_comments,
+                                      "the threads are listed without a place")
+            if exported and exported[1]:
+                doc = self.raw()
+        return place_doc_comments(found, exported, doc)
+
 
 def create(title, service=None, dry=False):
     """Create a document in the token account's Drive, returning its URL."""
@@ -354,7 +731,7 @@ def create(title, service=None, dry=False):
 
 
 def dispatch():
-    values, flags, argv = split_flags(sys.argv, ("tab",), ("--dry-run",))
+    values, flags, argv = split_flags(sys.argv, ("tab",), ("--dry-run", "--json", "--all"))
     if values["tab"] == "":
         # An unset shell variable expands to nothing, and silently writing to
         # the first tab is the wrong answer to --tab=$TAB
@@ -372,6 +749,14 @@ def dispatch():
         # looks like it might place content, and it cannot.
         raise ToolError(f"--tab= does not apply to `{cmd}` – it names a tab inside a "
                         f"document that already exists")
+    if tab and cmd in gcomments.COMMANDS:
+        raise ToolError(f"--tab= does not apply to `{cmd}` – a thread belongs to the whole "
+                        f"document, and `comments` names the tab each one is in")
+    if "--json" in flags and cmd != "comments":
+        raise ToolError("--json applies to `comments` – for the document, `json` is its own "
+                        "command")
+    if "--all" in flags and cmd != "comments":
+        raise ToolError("--all applies to `comments`")
 
     if cmd == "whoami":
         print(account() or "unknown – re-run auth.py to record the account")
@@ -386,7 +771,7 @@ def dispatch():
 
     args = argv[3:]
     needed = {"append": 1, "insert": 2, "replace": 2, "delete": 2,
-              "style": 3, "format": 3, "batch": 1}.get(cmd, 0)
+              "style": 3, "format": 3, "batch": 1, **gcomments.NEEDED}.get(cmd, 0)
     if len(args) < needed:
         raise ToolError(f"{cmd}: expected {needed} argument(s) after <doc>, got "
                         f"{len(args)} – run `gdocs` for usage")
@@ -461,6 +846,9 @@ def dispatch():
 
     elif cmd == "batch":
         print(json.dumps(doc.batch(load_json(args[0], "batch")), ensure_ascii=False))
+
+    elif cmd in gcomments.COMMANDS:
+        gcomments.run_command(cmd, doc, args, flags, comment_lines)
 
     else:
         print(f"unknown command: {cmd}", file=sys.stderr)

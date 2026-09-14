@@ -6,8 +6,8 @@ description: "Use whenever a task involves creating, reading or editing a Google
 # Google Sheets and Docs through their APIs
 
 Two commands, `gsheets` and `gdocs`, talk to the official APIs. They read several ranges
-in one call and edit cells, tabs, formatting and row groups directly, and `gsheets` reads
-and answers comment threads. Its token reaches the whole Drive, for those comments - no
+in one call and edit cells, tabs, formatting and row groups directly, and both read and
+answer comment threads. Their token reaches the whole Drive, for those comments - no
 command deletes, moves, renames or shares a file, and none should be improvised.
 
 ## First, is it here?
@@ -114,6 +114,10 @@ In Docs:
 - **A new paragraph inherits the previous one's style.** Text appended under a TITLE is
   TITLE too, silently. Write the text first and style afterwards: styles shift no
   indices, so one `index` read still covers every range.
+- **`comments` lists the open threads with the text each is on,** its tab as `--tab=` takes
+  it and its index range, current as of that read; `reply`, `resolve` and `reopen` take the
+  id. A thread whose text was deleted says so, and a resolved one has no known place. Nothing
+  creates a comment on text - Google does not show one made that way.
 
 ## Going further
 

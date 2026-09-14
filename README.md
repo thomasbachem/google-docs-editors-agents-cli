@@ -6,7 +6,7 @@ first so the write does not land in the wrong row. Those failures belong to the 
 task, and none of them exists through the API. These are the API.
 
 - `gsheets` – create, read and edit spreadsheets, and read and answer their comments
-- `gdocs` – create, read and edit documents
+- `gdocs` – create, read and edit documents, and read and answer their comments
 
 Two of the Google Docs editors, over their official APIs, sharing one OAuth client and one token –
 several ranges per call against a quota that counts calls, and every trap in the docs measured
@@ -14,11 +14,11 @@ against the live API, not reasoned about, because a wrong claim costs an agent a
 write rather than a raised eyebrow. Slides and Forms are the same family and not built yet: the name
 is the family, not a claim about today.
 
-The token holds the full **Drive scope**, for comments: Google serves a spreadsheet's comment
-threads only through the Drive API. That scope is the whole Drive – the token itself could
-delete, move, rename or share any file in the account. No command here does any of it, but that
-is a property of the code, not of the token, so treat `token.json` as access to the account's
-Drive.
+The token holds the full **Drive scope**, for comments: Google serves the comment threads of
+spreadsheets and documents alike only through the Drive API. That scope is the whole Drive – the
+token itself could delete, move, rename or share any file in the account. No command here does any
+of it, but that is a property of the code, not of the token, so treat `token.json` as access to
+the account's Drive.
 
 Run either bare for its usage text – the command reference, naming the traps each API hides:
 locale parsing, link normalization, index shift. Both are also Python modules, the cheaper path for

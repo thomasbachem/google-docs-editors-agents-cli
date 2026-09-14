@@ -243,6 +243,71 @@ discard a value gets. Named on the merge's top-left, or across the whole merge, 
 top-left. Both commands read the tab's merges with the tab ids and warn on the first case. A note
 is not a thread: nothing replies to it or resolves it.
 
+## Comments in a document: which text
+
+Measured on 2026-09-14 on the scratch document, with 9 threads made by hand across both tabs. A
+document's anchor reads `kix.yezgapnvz1yj`, and none of those ids appears in `documents.get`, tab
+content included. What the exports carry:
+
+| Format | Where a comment sits |
+|---|---|
+| DOCX | `commentRangeStart` and `commentRangeEnd` around the text, `w:date` to the second; a reply is an entry of its own, its parent named in `commentsExtended.xml` |
+| ODT | `office:annotation` and `office:annotation-end`, dated to the second – 3 MB for a few lines |
+| HTML, plain text | a `[a]` reference per thread, and its text – in plain text the reference follows the commented text |
+| Markdown, RTF, EPUB | nothing |
+
+Every tab is in the one export, each preceded by a paragraph styled Title holding its name. What
+else stands in a paragraph was measured by inserting it through the API and exporting:
+
+| In the document | Docs API | DOCX export |
+|---|---|---|
+| inline image | `inlineObjectElement`, one index | `w:drawing` around `wp:inline`, in place |
+| footnote mark | `footnoteReference`, one index | `w:footnoteReference`, in place |
+| page break | `pageBreak`, one index | `w:br w:type="page"`, in place |
+| soft line break | `\u000b` inside a text run | `w:br w:type="textWrapping"` |
+| person chip | `person`, one index, carrying the name | a link reading the name |
+
+`comments` reads the DOCX export, joins it to Drive on the creation second as for spreadsheets,
+splits it by those title paragraphs, and pairs each tab's paragraphs with the document's by their
+text – an image, footnote mark or page break counted as one character on both sides, a chip as its
+name – so a position becomes an index, counted in UTF-16 as the Docs API counts. Pairing tab by tab
+matters: aligned as one list, empty paragraphs closing one tab and opening the next can be paired
+across the boundary. On all 7 threads that still had a place after the edits below, including one
+after an emoji, one in a table cell, one in the second tab and one across two paragraphs, the text
+the Docs API holds at that range was the text the export marks. A second check used a real export
+of a document built through the API – a heading, a bullet list, a link, a person chip, an inline
+image, a footnote, a table, a word split by a bold run, two tabs – with comment markers put into
+its XML around 15 passages: each came back as the range the Docs API gives it. Where Google itself
+puts the markers around an image, a chip or a link was not part of that.
+
+What held, each checked by editing and exporting again, and in the Docs interface:
+
+| Change | Export | Docs interface |
+|---|---|---|
+| paragraph inserted above | range follows | highlight follows |
+| text inserted right before the word (`Neuer ` before `Anker`) | still `Anker` | on `Anker` alone |
+| `gdocs replace` of the whole word (`Altwort` -> `Neuwort`) | on `Neuwort` | on `Neuwort` – the pane's heading keeps `Altwort` |
+| reply through the API | unchanged | – |
+| **the sentence deleted** | **thread absent** | the pane heads it "Originalinhalt gelöscht" |
+| **thread resolved** | **absent from DOCX, ODT and plain text** | – |
+
+Drive keeps the deleted one open, its quote unchanged, so `comments` reports an open thread the
+export lacks as deleted – measured once, on a deleted sentence. A resolved one leaves no position
+in the DOCX, ODT or plain-text export, so only what it was made on is printed. The pane heads a
+thread with its tab and the text it was made on, so it can name text the document no longer holds.
+
+Not measured: where the export puts a comment made on a chip, an image or a footnote mark, a
+comment in a header, a footer or a child tab, or beside a suggestion; how a floating image, a rich
+link, a date chip or a table of contents export; and how a document of a single tab exports – it,
+and one whose title paragraphs are not found in order, is paired with the document as one list. A
+paragraph the export spells differently from the document gets the whole paragraph's range and
+says the exact one is unconfirmed, provided the text the thread is on appears in it; otherwise the
+thread is reported as unknown. Where the two sides differ in how many paragraphs a stretch holds, a
+text occurring twice in it pairs with neither copy, and a thread on it is unknown rather than
+guessed. A resolved thread is never matched, the export carrying none, and two open threads made
+in the same second are told apart by their text, so one whose text was deleted cannot take the
+place of the other. A listing is three calls: the threads, the export and the document.
+
 ## Smart chips
 
 Settled on 2026-09-14 on the scratch sheet: `chipRuns` **read** with a token holding no Drive
@@ -420,6 +485,7 @@ sheet.comments()                           # every thread, with its tab and cell
 
 doc = Document(url_or_id, tab="t.0")
 doc.append("Text")
+doc.comments()                             # every thread, with its tab, index range and text
 ```
 
 Importing is not enough on its own: the interpreter running your script has to be

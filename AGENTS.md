@@ -1,6 +1,6 @@
 # Working on this repo
 
-Two CLIs over the Google Sheets and Docs APIs, plus Drive for spreadsheet comments. `README.md`
+Two CLIs over the Google Sheets and Docs APIs, plus Drive for their comments. `README.md`
 covers setup and credentials, `REFERENCE.md` the measured behaviour of the APIs. Adding Slides or
 Forms is a scope in `auth.py`, a module beside these two, and one browser consent for everybody
 already installed – `require_scope` prints that instead of Google's 403.
@@ -14,7 +14,7 @@ and worth reading before you add a flag.
 | `gsheets`, `gdocs` | `/bin/sh` wrappers – self-locating through symlinks, so the directory can be renamed and they can go on `PATH` |
 | `gsheets.py`, `gdocs.py` | the two CLIs |
 | `gauth.py` | shared token handling, flag parsing, retries, error formatting |
-| `gcomments.py` | the Drive comment threads – listing, answering, resolving – apart from how `gsheets` places them |
+| `gcomments.py` | the Drive comment threads both share – each CLI places them from an export of its own |
 | `auth.py` | one-time browser consent |
 | `token.json`, `client_secret.json` | credentials, mode 600 – never tracked, never shared |
 | `scratch.local` | your own scratch surface ids, untracked – see **Leave the scratch surfaces empty** |
@@ -61,19 +61,20 @@ Putting them back:
 - Hidden rows outlive the collapsed group that hid them, so `reset --sizes` after ungrouping
 - A document tab: `gdocs delete <doc> 1 <end index - 1>`, per tab, reading the end index from
   `gdocs index` each time
-- Comments: `gsheets comments --all <sheet>`, then
-  `sheet.drive().comments().delete(fileId=sheet.id, commentId=…).execute()` per id. A comment on a
-  cell can only be made by hand in the Sheets interface, so whatever a check needed, someone made –
-  delete it. Deleted ones linger as empty entries under `includeDeleted`, which nothing removes
+- Comments: `gsheets comments --all <sheet>` or `gdocs comments --all <doc>`, then
+  `sheet.drive().comments().delete(fileId=sheet.id, commentId=…).execute()` per id – `doc.drive()`
+  likewise. A comment on a cell or on text can only be made by hand in the editor, so whatever a
+  check needed, someone made – delete it. Deleted ones linger as empty entries under
+  `includeDeleted`, which nothing removes
 
 `gsheets delete-rows` is structural: it shrinks the grid rather than blanking cells, so restore the
 count with `appendDimension` through `gsheets batch`, or with `insert-rows` at a given position.
 
 ## The Drive scope is for comments
 
-The token holds the full `drive` scope because a spreadsheet's comments exist only in the Drive
-API – and `drive.file`, by Google's own description, reaches only files the app created or was
-handed, which a sheet made in the Sheets interface is not (documented, not measured). Decided
+The token holds the full `drive` scope because comments, on a spreadsheet or a document, exist
+only in the Drive API – and `drive.file`, by Google's own description, reaches only files the app
+created or was handed, which a file made in the editor is not (documented, not measured). Decided
 2026-09-14, after weighing a narrower split – reading comments with their cells needs no Drive
 scope at all, through the web export URL, measured, and only replying does – and choosing one
 consent for everybody over it.

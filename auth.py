@@ -132,7 +132,7 @@ def warn_disabled_apis(creds):
         ("Docs", ("docs", "v1"), lambda s: s.documents().get(documentId=NO_SUCH_ID),
          "gdocs will fail on first use"),
         ("Drive", ("drive", "v3"), lambda s: s.files().get(fileId=NO_SUCH_ID),
-         "`gsheets comments`, `reply`, `resolve` and `reopen` will fail"),
+         "`comments`, `reply`, `resolve` and `reopen` will fail, in both tools"),
     ):
         try:
             ask(build(*version, credentials=creds)).execute()
