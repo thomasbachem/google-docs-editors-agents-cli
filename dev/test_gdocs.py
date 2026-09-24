@@ -6,14 +6,19 @@ covers `create`, which would otherwise leave a document behind that no command
 here deletes.
 """
 
+import atexit
 import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Every throwaway file goes in here, removed on the way out however the run ends
+SCRATCH = tempfile.mkdtemp(prefix="gapi-test-")
+atexit.register(shutil.rmtree, SCRATCH, ignore_errors=True)
 sys.path.insert(0, os.path.join(HERE, os.pardir))
 from googleapiclient.errors import HttpError  # noqa: E402
 
@@ -106,13 +111,13 @@ class Docs:
 
 def use_token(email="tester@example.com", source="id_token", scopes=None):
     """Point the shared auth module at a throwaway token."""
-    fd, path = tempfile.mkstemp(suffix=".json")
+    fd, path = tempfile.mkstemp(suffix=".json", dir=SCRATCH)
     with os.fdopen(fd, "w") as f:
         json.dump({"email": email, "email_source": source,
                    "scopes": scopes if scopes is not None
                    else [gauth.SHEETS_SCOPE, gauth.DOCS_SCOPE]}, f)
     gauth.TOKEN = path
-    fd, spath = tempfile.mkstemp(suffix=".json")
+    fd, spath = tempfile.mkstemp(suffix=".json", dir=SCRATCH)
     with os.fdopen(fd, "w") as f:
         json.dump({"installed": {"project_id": "test-project-42"}}, f)
     gauth.SECRETS = spath

@@ -6,6 +6,7 @@ including the refusal that protects the token when the consent lands on a
 different Google account.
 """
 
+import atexit
 import base64
 import contextlib
 import importlib
@@ -24,6 +25,9 @@ OFFLINE = object()     # a consent whose token exchange found no network
 SAID = []              # what the last run_case exited with
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Every throwaway file goes in here, removed on the way out however the run ends
+SCRATCH = tempfile.mkdtemp(prefix="gapi-test-")
+atexit.register(shutil.rmtree, SCRATCH, ignore_errors=True)
 SRC = os.path.join(HERE, os.pardir, "auth.py")
 GAUTH = os.path.join(HERE, os.pardir, "gauth.py")
 fails = []
@@ -107,7 +111,7 @@ class FakeFlow:
 
 def run_case(name, prior_token, id_token, expect_exit, expect_email, expect_source,
              client={"installed": {}}):
-    d = tempfile.mkdtemp()
+    d = tempfile.mkdtemp(dir=SCRATCH)
     shutil.copy(SRC, os.path.join(d, "auth.py"))
     shutil.copy(GAUTH, os.path.join(d, "gauth.py"))
     json.dump(client, open(os.path.join(d, "client_secret.json"), "w"))
@@ -205,7 +209,7 @@ def check(name, cond, detail=""):
 def fresh_auth(home):
     """Import auth.py with HOME pointed at a throwaway tree – DOWNLOADS is resolved
     at import, so it has to be set before, not after."""
-    d = tempfile.mkdtemp()
+    d = tempfile.mkdtemp(dir=SCRATCH)
     shutil.copy(SRC, os.path.join(d, "auth.py"))
     shutil.copy(GAUTH, os.path.join(d, "gauth.py"))
     os.environ["HOME"] = home
@@ -219,7 +223,7 @@ def fresh_auth(home):
 
 real_home = os.environ.get("HOME", "")
 try:
-    home = tempfile.mkdtemp()
+    home = tempfile.mkdtemp(dir=SCRATCH)
     dl = os.path.join(home, "Downloads")
     os.makedirs(dl)
     one = os.path.join(dl, "client_secret_111-aaa.apps.googleusercontent.com.json")
