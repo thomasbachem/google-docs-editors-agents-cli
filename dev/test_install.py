@@ -69,14 +69,28 @@ try:
     # --skill: the package is the only thing that tells a Cowork task where this
     # checkout is, so what it must never do is ship without the path in it.
     import zipfile
+
+    def checkout_zip():
+        """The checkout's own package as it stands, or None.
+
+        One may well be there – run from the checkout, `install --skill` builds
+        it right there, beside you – so what this run must do is leave it be.
+        """
+        try:
+            found = os.stat(os.path.join(ROOT, "google-sheets-docs.zip"))
+        except FileNotFoundError:
+            return None
+        return found.st_ino, found.st_mtime_ns, found.st_size
+
     shed = os.path.join(box, "shed")
     os.makedirs(shed)
+    before = checkout_zip()
     code, out = run("--skill", os.path.join(box, "skillbin"), cwd=shed)
     built = os.path.join(shed, "google-sheets-docs.zip")
+    untouched = checkout_zip() == before
     check("--skill builds the package beside you, not in the checkout",
-          code == 0 and os.path.isfile(built)
-          and not os.path.exists(os.path.join(ROOT, "google-sheets-docs.zip")),
-          f"exit {code}")
+          code == 0 and os.path.isfile(built) and untouched,
+          f"exit {code}, checkout's package {'untouched' if untouched else 'changed'}")
     with zipfile.ZipFile(built) as z:
         names = z.namelist()
         body = z.read("google-sheets-docs/SKILL.md").decode()
