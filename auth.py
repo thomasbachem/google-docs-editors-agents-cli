@@ -196,6 +196,14 @@ def main():
     except WSGITimeoutError:
         sys.exit(f"\nno consent within {CONSENT_TIMEOUT // 60} minutes, so nothing was changed –\n"
                  f"{TOKEN} is exactly as it was. Re-run when you can finish the browser step.")
+    except Exception as err:
+        # The one call in there that needs the network is the last, trading the
+        # consent for a token – so the browser step went through
+        dead = gauth.network_failure(err)
+        if dead is None:
+            raise
+        sys.exit(f"\n{dead}\nThe consent went through, but not the token exchange after it, so\n"
+                 f"nothing was changed – {TOKEN} is exactly as it was. Re-run once online.")
     email = email_from_id_token(getattr(creds, "id_token", None))
     from_claim = bool(email)
 

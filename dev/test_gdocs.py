@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(HERE, os.pardir))
 from googleapiclient.errors import HttpError  # noqa: E402
 
 import gauth  # noqa: E402
+import httplib2  # noqa: E402
 import gcomments  # noqa: E402
 import gdocs  # noqa: E402
 
@@ -453,6 +454,23 @@ DEAD = ("no connection to docs.googleapis.com over IPv6 or IPv4 within 10s – "
         "is the network down?")
 run_failing(["gdocs", "get", "ID"], gauth.Unreachable(gauth.errno.EHOSTUNREACH, DEAD))
 check("a dead network exits with one line, not a traceback", LAST_EXIT == DEAD, str(LAST_EXIT))
+
+OFFLINE = "cannot resolve docs.googleapis.com – is the network down?"
+try:
+    try:
+        raise gauth.Unresolvable(gauth.socket.EAI_NONAME, OFFLINE)
+    except OSError:
+        raise httplib2.ServerNotFoundError("Unable to find the server at docs.googleapis.com")
+except httplib2.ServerNotFoundError as err:
+    wrapped = err
+run_failing(["gdocs", "get", "ID"], wrapped)
+check("offline too, dug out from under httplib2's wrapping", LAST_EXIT == OFFLINE, str(LAST_EXIT))
+try:
+    run_failing(["gdocs", "get", "ID"], RuntimeError("a bug"))
+    escaped = False
+except RuntimeError:
+    escaped = True
+check("while any other error still surfaces whole, traceback and all", escaped)
 
 # the empty id that produced that HTML page in the first place
 run(["gdocs", "index", ""])

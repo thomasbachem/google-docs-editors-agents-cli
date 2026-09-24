@@ -20,6 +20,8 @@ from google_auth_oauthlib.flow import WSGITimeoutError
 from googleapiclient.errors import HttpError
 
 TIMED_OUT = object()   # a consent nobody ever completed
+OFFLINE = object()     # a consent whose token exchange found no network
+SAID = []              # what the last run_case exited with
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, os.pardir, "auth.py")
@@ -91,6 +93,15 @@ class FakeFlow:
         FakeFlow.last_kwargs = kw
         if self._creds is TIMED_OUT:
             raise WSGITimeoutError("no response")
+        if self._creds is OFFLINE:
+            # fetch_token's failure as requests wraps it, around the copy's own gauth
+            gauth = sys.modules["gauth"]
+            try:
+                raise gauth.Unresolvable(gauth.socket.EAI_NONAME,
+                                         "cannot resolve oauth2.googleapis.com – "
+                                         "is the network down?")
+            except OSError as err:
+                raise ConnectionError("Max retries exceeded") from err
         return self._creds
 
 
@@ -111,7 +122,8 @@ def run_case(name, prior_token, id_token, expect_exit, expect_email, expect_sour
     auth = importlib.import_module("auth")
     auth.InstalledAppFlow = type("F", (), {
         "from_client_secrets_file": staticmethod(
-            lambda p, s: FakeFlow(TIMED_OUT if id_token is TIMED_OUT else FakeCreds(id_token)))
+            lambda p, s: FakeFlow(id_token if id_token in (TIMED_OUT, OFFLINE)
+                                  else FakeCreds(id_token)))
     })
     auth.build = stub_build()      # the post-consent probe must not reach the network
 
@@ -120,6 +132,7 @@ def run_case(name, prior_token, id_token, expect_exit, expect_email, expect_sour
         auth.main()
     except SystemExit as e:
         code = 1 if e.code else 0
+        SAID[:] = [str(e.code)]
     finally:
         sys.path.remove(d)
         sys.modules.pop("auth", None)
@@ -163,6 +176,16 @@ run_case("inferred -> attested upgrade",
 # and a run that ends that way must leave the working token alone.
 run_case("a consent nobody completes times out, token untouched",
          {"email": "a@b.de", "email_source": "id_token"}, TIMED_OUT, 1, "a@b.de", "id_token")
+
+run_case("a token exchange that finds no network ends in a line, token untouched",
+         {"email": "a@b.de", "email_source": "id_token"}, OFFLINE, 1, "a@b.de", "id_token")
+said = SAID[0] if SAID else ""
+ok = ("cannot resolve oauth2.googleapis.com" in said and "nothing was changed" in said
+      and "Traceback" not in said)
+print(f"  {'ok  ' if ok else 'FAIL'} naming the host, and that nothing changed"
+      f"  {said.strip().splitlines()[0] if said.strip() else 'silent'}")
+if not ok:
+    fails.append("naming the host, and that nothing changed")
 
 check_timeout = FakeFlow.last_kwargs.get("timeout_seconds")
 print(f"  {'ok  ' if check_timeout else 'FAIL'} the consent wait is bounded, not open-ended"

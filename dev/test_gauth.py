@@ -616,17 +616,17 @@ def stack_races():
     request._sleep = lambda seconds: None
     try:
         request.execute(num_retries=3)
-        return "returned", len(raced)
+        return "returned", len(raced), None
     except Exception as err:
-        return type(err).__name__, len(raced)
+        return type(err).__name__, len(raced), err
 
 
 verdict[0] = None
-outcome, races = stack_races()
+outcome, races, _ = stack_races()
 check("a dead network is retried neither by httplib2 nor by the client library",
       (outcome, races) == ("Unreachable", 1), f"{outcome}, {races} race(s)")
 verdict[0] = ConnectionRefusedError(gauth.errno.ECONNREFUSED, "refused")
-outcome, races = stack_races()
+outcome, races, _ = stack_races()
 # the contrast that makes the errno matter: this one IS retried
 check("whereas a refused connection is retried as before",
       (outcome, races) == ("ConnectionRefusedError", 4), f"{outcome}, {races} race(s)")
@@ -677,15 +677,68 @@ def refresh_mid_run():
     http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(proxy_info=None))
     try:
         http.request("https://sheets.googleapis.com/v4/spreadsheets/x")
-        return "returned", len(raced)
+        return "returned", len(raced), None
     except Exception as err:
-        return type(err).__name__, len(raced)
+        return type(err).__name__, len(raced), err
 
 
 verdict[0] = None
-outcome, races = refresh_mid_run()
+outcome, races, _ = refresh_mid_run()
 check("a refresh mid-run raises it unwrapped too, after one race",
       (outcome, races) == ("Unreachable", 1), f"{outcome}, {races} race(s)")
+
+# --- offline: the name does not resolve at all ------------------------------
+lookups = []
+
+
+def offline(host, port, *rest):
+    """What a Mac with no network answers, at once."""
+    lookups.append(host)
+    raise socket.gaierror(socket.EAI_NONAME, "nodename nor servname provided, or not known")
+
+
+gauth.plain_getaddrinfo = offline
+try:
+    socket.getaddrinfo("sheets.googleapis.com", 443)
+    failed = None
+except socket.gaierror as err:
+    failed = err
+check("offline, a Google host fails as Unresolvable – still a gaierror to every library",
+      isinstance(failed, gauth.Unresolvable), type(failed).__name__)
+check("saying which host, and what to check",
+      str(failed) == "cannot resolve sheets.googleapis.com – is the network down?", str(failed))
+try:
+    socket.getaddrinfo("example.com", 443)
+    other = None
+except socket.gaierror as err:
+    other = err
+check("any other host's failure is left exactly as it was", type(other) is socket.gaierror,
+      type(other).__name__)
+lookups.clear()
+outcome, _, err = stack_races()
+check("the Sheets call still retries it, as it retried every failed lookup",
+      outcome == "ServerNotFoundError" and len(lookups) == 4, f"{outcome}, {len(lookups)} lookups")
+check("and the reason is found under httplib2's wrapping",
+      isinstance(gauth.network_failure(err), gauth.Unresolvable))
+outcome, _, err = refresh_mid_run()
+check("and under a mid-run refresh's TransportError around httplib2's",
+      outcome == "TransportError" and isinstance(gauth.network_failure(err), gauth.Unresolvable),
+      outcome)
+check("a refresh offline raises Unresolvable, unwrapped",
+      refresh_failing(gauth.Unresolvable(socket.EAI_NONAME, "x")) == "Unresolvable")
+try:
+    try:
+        raise ConnectionResetError("reset")
+    except OSError as err:
+        raise TransportError(err) from err
+except TransportError as err:
+    wrapped = err
+check("an error with no network reason under it is not taken for one",
+      gauth.network_failure(wrapped) is None and gauth.network_failure(ValueError()) is None)
+looping, back = ValueError("a"), KeyError("b")
+looping.__cause__, back.__cause__ = back, looping
+check("a chain that loops is walked once, not forever", gauth.network_failure(looping) is None)
+gauth.plain_getaddrinfo = lambda host, port, *rest: list(INFOS)
 
 import importlib.util  # noqa: E402
 

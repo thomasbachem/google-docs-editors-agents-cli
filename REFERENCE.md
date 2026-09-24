@@ -583,6 +583,18 @@ neither httplib2 nor the client library retries:
 no connection to sheets.googleapis.com over IPv6 or IPv4 within 10s – is the network down?
 ```
 
+### No network at all
+
+Offline the name does not resolve, and every path ended in a traceback, wrapped its own way – the
+Sheets call's after 7.3s of retries. A Google host that does not resolve now raises
+`gauth.Unresolvable`, still a `socket.gaierror`, so the libraries behave as before, and
+`gauth.network_failure(err)` finds it or an `Unreachable` under any wrapping. `credentials()`
+raises either unwrapped; the CLIs and `auth.py` exit on its line:
+
+```
+cannot resolve sheets.googleapis.com – is the network down?
+```
+
 ## Environment
 
 `GAPI_PYTHON` picks the interpreter the `gsheets`/`gdocs` wrappers exec, overriding both the

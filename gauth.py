@@ -373,16 +373,30 @@ class Unreachable(OSError):
         return self.strerror or super().__str__()
 
 
-def network_failure(err):
-    """The Unreachable behind an error, or None.
+class Unresolvable(socket.gaierror):
+    """A Google host whose name did not resolve – offline, as a rule.
 
-    Measured: a refresh raises google-auth's TransportError around three layers
-    from requests and urllib3, with the reason at the bottom. A chain can loop,
-    as the one credentials() re-raises does, so each link is visited once.
+    Still a gaierror, so every library treats it exactly as before, retries
+    included; it only carries a line worth printing, and network_failure()
+    finds it under whatever the libraries wrap around it.
+    """
+
+    def __str__(self):
+        return self.strerror or super().__str__()
+
+
+def network_failure(err):
+    """The Unreachable or Unresolvable behind an error, or None.
+
+    Measured with the network gone: the Sheets call raises httplib2's
+    ServerNotFoundError, a refresh google-auth's TransportError around three
+    layers from requests and urllib3, a refresh mid-run a TransportError around
+    httplib2's – each with the reason at the bottom. A chain can loop, as the
+    one credentials() re-raises does, so each link is visited once.
     """
     seen = set()
     while err is not None and id(err) not in seen:
-        if isinstance(err, Unreachable):
+        if isinstance(err, (Unreachable, Unresolvable)):
             return err
         seen.add(id(err))
         err = err.__cause__ or err.__context__
@@ -457,9 +471,15 @@ def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     meanwhile, Wi-Fi to a phone's hotspot, would otherwise send that connection
     straight into the hang. Connections are reused, so that is rarely a cost.
     """
-    found = plain_getaddrinfo(host, port, family, type, proto, flags)
-    if (family != socket.AF_UNSPEC or type not in (0, socket.SOCK_STREAM) or not port
-            or not isinstance(host, str) or not host.lower().rstrip(".").endswith(GOOGLE)):
+    raced = (family == socket.AF_UNSPEC and type in (0, socket.SOCK_STREAM) and port
+             and isinstance(host, str) and host.lower().rstrip(".").endswith(GOOGLE))
+    try:
+        found = plain_getaddrinfo(host, port, family, type, proto, flags)
+    except socket.gaierror as err:
+        if not raced:
+            raise
+        raise Unresolvable(err.errno, f"cannot resolve {host} – is the network down?") from err
+    if not raced:
         return found
     families = [f for f in FAMILY_NAMES if any(info[0] == f for info in found)]
     if not families:

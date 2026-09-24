@@ -121,8 +121,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import gcomments
-from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, Unreachable, account,
-                   as_int, credentials, http_error_message, load_json, project,
+from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, account, as_int,
+                   credentials, http_error_message, load_json, network_failure, project,
                    require_scope, send, split_flags)
 
 DOC_URL = "https://docs.google.com/document/d/{}/edit"
@@ -860,10 +860,16 @@ def main():
         dispatch()
     except DryRun:
         pass          # send() already printed the request it did not make
-    except (ToolError, Unreachable) as err:
+    except ToolError as err:
         sys.exit(str(err))
     except HttpError as err:
         sys.exit(http_error_message(err))
+    except Exception as err:
+        # a network that is gone ends in one line, however the libraries wrapped it
+        dead = network_failure(err)
+        if dead is None:
+            raise
+        sys.exit(str(dead))
 
 
 if __name__ == "__main__":
