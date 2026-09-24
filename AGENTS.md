@@ -13,7 +13,7 @@ and worth reading before you add a flag.
 |---|---|
 | `gsheets`, `gdocs` | `/bin/sh` wrappers – self-locating through symlinks, so the directory can be renamed and they can go on `PATH` |
 | `gsheets.py`, `gdocs.py` | the two CLIs |
-| `gauth.py` | shared token handling, flag parsing, retries, error formatting |
+| `gauth.py` | shared token handling, flag parsing, retries, error formatting, the IPv6/IPv4 race |
 | `gcomments.py` | the Drive comment threads both share – each CLI places them from an export of its own |
 | `auth.py` | one-time browser consent |
 | `token.json`, `client_secret.json` | credentials, mode 600 – never tracked, never shared |

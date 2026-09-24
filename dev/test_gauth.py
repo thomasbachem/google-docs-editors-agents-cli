@@ -8,9 +8,11 @@ first refresh. Nothing here touches the network or the real token.
 
 import json
 import os
+import socket
 import stat
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, os.pardir))
@@ -456,6 +458,244 @@ before = len(gauth.calls.log)
 run_request((20, 40), (2, QUOTA_BODY))
 check("a waited-out retry counts as another call",
       len(gauth.calls.log) - before == 3, str(len(gauth.calls.log) - before))
+
+# --- the address race: an IPv6 that swallows packets must not hang a call ---
+print("\n--- IPv6 / IPv4 race ---")
+V6, V4 = socket.AF_INET6, socket.AF_INET
+# The resolver's order on the connection that hung: IPv6 addresses come first
+INFOS = [(V6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", 443, 0, 0)),
+         (V6, socket.SOCK_STREAM, 6, "", ("2001:db8::2", 443, 0, 0)),
+         (V4, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 443))]
+REAL_HANDSHAKE = gauth.handshake
+
+
+def race_with(behaviour, head_start=0.05, give_up=1.0, infos=INFOS):
+    """A race against scripted handshakes, per family: seconds until it answers,
+    "refused", or "silent" – no answer before its timeout.
+
+    The fake stays installed afterwards: a loser still running must not reach
+    the real handshake, which would dial these addresses for real.
+    """
+    tried = []
+
+    def handshake(family, address, timeout):
+        tried.append(address[0])
+        how = behaviour[family]
+        if how == "refused":
+            raise ConnectionRefusedError(address[0])
+        if how == "silent":
+            time.sleep(timeout)
+            raise socket.timeout("timed out")
+        time.sleep(how)
+
+    gauth.handshake = handshake
+    start = time.monotonic()
+    won = gauth.race(infos, head_start, give_up)
+    return won, time.monotonic() - start, tried
+
+
+won, took, tried = race_with({V6: 0, V4: 0})
+check("an IPv6 that answers wins, and IPv4 is never dialled",
+      won == V6 and tried == ["2001:db8::1"], f"{won} {tried}")
+won, took, tried = race_with({V6: 0, V4: 0}, infos=INFOS[::-1])
+check("a resolver listing IPv4 first is followed, IPv6 never dialled",
+      won == V4 and tried == ["192.0.2.1"], f"{won} {tried}")
+won, took, tried = race_with({V6: "silent", V4: 0})
+check("an IPv6 that swallows packets loses to IPv4 after the head start",
+      won == V4 and 0.05 <= took < 0.5, f"{won} {took:.2f}s")
+check("one address per family is dialled, the resolver's first of each",
+      tried == ["2001:db8::1", "192.0.2.1"], str(tried))
+won, took, _ = race_with({V6: "refused", V4: 0}, head_start=5)
+check("a refused IPv6 starts IPv4 at once, not after the head start",
+      won == V4 and took < 1, f"{won} {took:.2f}s")
+won, took, _ = race_with({V6: 0.2, V4: 0.6})
+check("a slow IPv6 races on once IPv4 has joined", won == V6, f"{won} {took:.2f}s")
+won, took, _ = race_with({V6: "silent", V4: "silent"}, give_up=0.3)
+check("silence on both is None, at the deadline",
+      won is None and 0.3 <= took < 1, f"{won} {took:.2f}s")
+won, took, _ = race_with({V6: "refused", V4: "refused"}, give_up=5)
+check("refusal on both is None at once, the deadline not waited out",
+      won is None and took < 1, f"{won} {took:.2f}s")
+won, _, _ = race_with({V4: 0}, infos=INFOS[2:])
+check("a single family races alone", won == V4, str(won))
+
+listener = socket.socket(V4, socket.SOCK_STREAM)
+listener.bind(("127.0.0.1", 0))
+listener.listen(1)
+port = listener.getsockname()[1]
+try:
+    REAL_HANDSHAKE(V4, ("127.0.0.1", port), 1)
+    answered = True
+except OSError:
+    answered = False
+listener.close()
+try:
+    REAL_HANDSHAKE(V4, ("127.0.0.1", port), 1)
+    refused = False
+except OSError:
+    refused = True
+check("the real handshake completes against a listener on loopback", answered)
+check("and fails once nothing listens there", refused)
+
+ORIGINAL = gauth.getaddrinfo.__wrapped__
+check("the resolver is replaced on import", socket.getaddrinfo is gauth.getaddrinfo)
+raced, verdict = [], [V4]
+
+
+def fake_race(infos):
+    raced.append(infos)
+    if isinstance(verdict[0], Exception):
+        raise verdict[0]
+    return verdict[0]
+
+
+gauth.plain_getaddrinfo = lambda host, port, *rest: list(INFOS)
+gauth.race = fake_race
+gauth.fallbacks.clear()
+got = socket.getaddrinfo("sheets.googleapis.com", 443, 0, socket.SOCK_STREAM)
+check("a Google host's addresses come back in the order they answered",
+      [info[0] for info in got] == [V4, V6, V6], str([info[0] for info in got]))
+check("with none of them dropped", sorted(got) == sorted(INFOS))
+socket.getaddrinfo("sheets.googleapis.com", 443)
+check("a fallback is remembered, not raced per connection", len(raced) == 1, str(len(raced)))
+gauth.fallbacks[("sheets.googleapis.com", 443)] = (V4, time.monotonic() - gauth.REMEMBER - 1)
+socket.getaddrinfo("sheets.googleapis.com", 443)
+check("an old fallback is raced again", len(raced) == 2, str(len(raced)))
+# A remembered IPv6 win is what would hang after a move from Wi-Fi to a hotspot
+raced.clear()
+gauth.fallbacks.clear()
+verdict[0] = V6
+socket.getaddrinfo("sheets.googleapis.com", 443)
+socket.getaddrinfo("sheets.googleapis.com", 443)
+check("a win by the resolver's first family is raced again at the next connection",
+      len(raced) == 2 and not gauth.fallbacks, f"{len(raced)} races, kept {gauth.fallbacks}")
+raced.clear()
+verdict[0] = V4
+gauth.plain_getaddrinfo = lambda host, port, *rest: INFOS[::-1]
+socket.getaddrinfo("sheets.googleapis.com", 443)
+socket.getaddrinfo("sheets.googleapis.com", 443)
+check("first meaning the resolver's first – IPv4 where it lists IPv4 first",
+      len(raced) == 2 and not gauth.fallbacks, f"{len(raced)} races, kept {gauth.fallbacks}")
+gauth.plain_getaddrinfo = lambda host, port, *rest: list(INFOS)
+gauth.fallbacks[("sheets.googleapis.com", 443)] = (V4, time.monotonic() - gauth.REMEMBER - 1)
+verdict[0] = V6
+socket.getaddrinfo("sheets.googleapis.com", 443)
+check("and an old fallback is dropped once the first family wins again",
+      not gauth.fallbacks, str(gauth.fallbacks))
+raced.clear()
+check("another host is left alone, unraced",
+      socket.getaddrinfo("example.com", 443) == INFOS and not raced)
+check("a caller asking for one family is not second-guessed",
+      socket.getaddrinfo("docs.googleapis.com", 443, V6) == INFOS and not raced)
+check("nor one asking for anything but TCP, which a handshake says nothing about",
+      socket.getaddrinfo("docs.googleapis.com", 443, 0, socket.SOCK_DGRAM) == INFOS
+      and not raced)
+
+verdict[0] = None
+try:
+    socket.getaddrinfo("www.googleapis.com", 443)
+    dead = "returned"
+except gauth.Unreachable as err:
+    dead = str(err)
+check("no handshake at all is Unreachable, naming the host and the families",
+      "no connection to www.googleapis.com over IPv6 or IPv4 within" in dead
+      and "network" in dead, dead)
+check("and is not remembered, so the next call races again",
+      ("www.googleapis.com", 443) not in gauth.fallbacks)
+
+
+def stack_races():
+    """How often the real httplib2 + client-library stack raced before giving up."""
+    import httplib2
+    from googleapiclient.http import HttpRequest
+    raced.clear()
+    gauth.fallbacks.clear()
+    # proxy_info=None, so a proxy in the environment cannot route this to a real host
+    request = HttpRequest(httplib2.Http(proxy_info=None), lambda resp, content: content,
+                          "https://sheets.googleapis.com/v4/spreadsheets/x")
+    request._sleep = lambda seconds: None
+    try:
+        request.execute(num_retries=3)
+        return "returned", len(raced)
+    except Exception as err:
+        return type(err).__name__, len(raced)
+
+
+verdict[0] = None
+outcome, races = stack_races()
+check("a dead network is retried neither by httplib2 nor by the client library",
+      (outcome, races) == ("Unreachable", 1), f"{outcome}, {races} race(s)")
+verdict[0] = ConnectionRefusedError(gauth.errno.ECONNREFUSED, "refused")
+outcome, races = stack_races()
+# the contrast that makes the errno matter: this one IS retried
+check("whereas a refused connection is retried as before",
+      (outcome, races) == ("ConnectionRefusedError", 4), f"{outcome}, {races} race(s)")
+
+from google.auth.exceptions import TransportError  # noqa: E402
+
+
+def refresh_failing(inner):
+    """A refresh whose transport fails the way requests wraps it."""
+    def refresh(self, request):
+        try:
+            try:
+                raise inner
+            except OSError as err:
+                raise ConnectionError("Max retries exceeded") from err
+        except ConnectionError as err:
+            raise TransportError(err) from err
+    real, FakeCreds.refresh = FakeCreds.refresh, refresh
+    path = use_token()
+    FakeCreds.start_valid = False
+    try:
+        gauth.credentials()
+        return "returned"
+    except Exception as err:
+        return type(err).__name__
+    finally:
+        FakeCreds.refresh = real
+        os.unlink(path)
+
+
+check("a refresh on a dead network raises Unreachable, not requests' wrapping of it",
+      refresh_failing(gauth.Unreachable(gauth.errno.EHOSTUNREACH, "x")) == "Unreachable")
+check("any other transport failure is left as it was",
+      refresh_failing(ConnectionResetError("reset")) == "TransportError")
+
+
+def refresh_mid_run():
+    """A token expiring mid-run, refreshed by the HTTP layer through httplib2."""
+    import datetime
+    import google_auth_httplib2
+    import httplib2
+    from google.oauth2.credentials import Credentials
+    raced.clear()
+    gauth.fallbacks.clear()
+    creds = Credentials(token="t", refresh_token="r", client_id="c", client_secret="s",
+                        token_uri="https://oauth2.googleapis.com/token",
+                        expiry=datetime.datetime(2000, 1, 1))
+    http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(proxy_info=None))
+    try:
+        http.request("https://sheets.googleapis.com/v4/spreadsheets/x")
+        return "returned", len(raced)
+    except Exception as err:
+        return type(err).__name__, len(raced)
+
+
+verdict[0] = None
+outcome, races = refresh_mid_run()
+check("a refresh mid-run raises it unwrapped too, after one race",
+      (outcome, races) == ("Unreachable", 1), f"{outcome}, {races} race(s)")
+
+import importlib.util  # noqa: E402
+
+spec = importlib.util.spec_from_file_location("gauth_again", os.path.join(HERE, os.pardir,
+                                                                          "gauth.py"))
+again = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(again)
+check("a second copy of gauth wraps the real resolver, not the first copy's wrapper",
+      again.plain_getaddrinfo is ORIGINAL)
+socket.getaddrinfo = gauth.getaddrinfo
 
 print("\nFAILURES:", fails if fails else "none")
 sys.exit(1 if fails else 0)

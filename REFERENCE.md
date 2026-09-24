@@ -546,6 +546,43 @@ On Python older than the version `google-api-core` wants, every invocation opens
 `FutureWarning`. It goes to **stderr**, so only a merged stream is polluted – `PYTHONWARNINGS=ignore`
 silences it either way.
 
+## An IPv6 route that never answers
+
+A mobile connection on 2026-09-24 routed IPv6 and dropped every packet: `curl -6` to
+`sheets.googleapis.com` timed out, `curl -4` answered in 0.3s.
+
+| On that connection | Left to the libraries | With the race |
+|---|---|---|
+| A Sheets read | `TimeoutError` after 246s, IPv4 never tried | 1.0s, the whole `gsheets info` |
+| A token refresh | IPv4 reached after 76s | 0.6s |
+
+The resolver listed six IPv6 addresses before the first IPv4 one. httplib2 gives the first the
+client library's 60s timeout, then re-raises instead of trying the next, and every retry starts
+over at IPv6; requests does move on, but only after the system's own connect timeout.
+
+So `gauth` reorders the resolver's answer for hosts under `googleapis.com` and `google.com` by a
+race, as browsers do (RFC 8305): a handshake in the family listed first, one in the other 250ms
+later or as soon as the first fails, and the winner listed first – nothing dropped. It is
+installed on import, so a script driving `Client` or `Document` gets it too; other hosts,
+single-family and non-TCP lookups pass untouched. Following the resolver's order keeps a
+system's own preference: later that day macOS listed IPv4 first unprompted, and a race took 35ms
+instead of 293ms.
+
+Only a fallback is remembered, for 60s per host. A win by the first family is raced again at the
+next connection, since a network can turn on it – Wi-Fi to a hotspot – and a remembered win
+would walk straight into the hang. Nothing is shared between processes: the one thing safe to
+share, a fallback, would save a call 0.3s, and only while IPv6 is broken.
+
+The price is one extra handshake per host where the first family works – a median 54ms on that
+connection; on a hotel Wi-Fi 26ms over IPv4 and, IPv6 listed first, 17ms, IPv4 never dialled in
+seven races – and the head start plus one where it does not: 293ms. With no handshake in 10s the
+call ends in one line, `gauth.Unreachable` in-process – an `OSError` with `EHOSTUNREACH`, which
+neither httplib2 nor the client library retries:
+
+```
+no connection to sheets.googleapis.com over IPv6 or IPv4 within 10s – is the network down?
+```
+
 ## Environment
 
 `GAPI_PYTHON` picks the interpreter the `gsheets`/`gdocs` wrappers exec, overriding both the

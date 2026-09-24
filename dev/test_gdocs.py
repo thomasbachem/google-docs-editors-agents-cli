@@ -449,6 +449,11 @@ check("an HTML error page is summarised, not printed",
       isinstance(LAST_EXIT, str) and len(LAST_EXIT) < 200 and "HTML error page" in LAST_EXIT,
       f"{len(str(LAST_EXIT))} chars")
 
+DEAD = ("no connection to docs.googleapis.com over IPv6 or IPv4 within 10s – "
+        "is the network down?")
+run_failing(["gdocs", "get", "ID"], gauth.Unreachable(gauth.errno.EHOSTUNREACH, DEAD))
+check("a dead network exits with one line, not a traceback", LAST_EXIT == DEAD, str(LAST_EXIT))
+
 # the empty id that produced that HTML page in the first place
 run(["gdocs", "index", ""])
 check("an empty document id is refused up front",

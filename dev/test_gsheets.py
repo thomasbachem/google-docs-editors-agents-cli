@@ -668,6 +668,11 @@ check("an HTML error page is summarised, not printed",
       isinstance(LAST_EXIT, str) and len(LAST_EXIT) < 200 and "HTML error page" in LAST_EXIT,
       f"{len(str(LAST_EXIT))} chars")
 
+DEAD = ("no connection to sheets.googleapis.com over IPv6 or IPv4 within 10s – "
+        "is the network down?")
+run_failing(["gsheets", "info", "ID"], gauth.Unreachable(gauth.errno.EHOSTUNREACH, DEAD))
+check("a dead network exits with one line, not a traceback", LAST_EXIT == DEAD, str(LAST_EXIT))
+
 # a transient 503 must not become a write that silently never happened
 # the read path no longer passes num_retries per call – the service carries it,
 # which is what covers in-process callers who never go through send()

@@ -121,7 +121,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import gcomments
-from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, account,
+from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, Unreachable, account,
                    as_int, credentials, http_error_message, load_json, project,
                    require_scope, send, split_flags)
 
@@ -860,7 +860,7 @@ def main():
         dispatch()
     except DryRun:
         pass          # send() already printed the request it did not make
-    except ToolError as err:
+    except (ToolError, Unreachable) as err:
         sys.exit(str(err))
     except HttpError as err:
         sys.exit(http_error_message(err))

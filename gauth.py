@@ -7,15 +7,20 @@ in ways that only show up later – see write_token() and credentials().
 """
 
 import atexit
+import errno
 import json
 import os
+import queue
 import re
+import socket
 import sys
 import tempfile
+import threading
 import time
 from collections import namedtuple
 from urllib.parse import urlsplit
 
+from google.auth.exceptions import TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
@@ -339,6 +344,146 @@ class RetryingRequest(HttpRequest):
                       file=sys.stderr)
                 time.sleep(wait)
 
+
+# An IPv6 route that swallows packets instead of refusing them – a mobile
+# connection, 2026-09-24 – hung every call for minutes. The resolver listed six
+# IPv6 addresses of sheets.googleapis.com before the first IPv4 one; httplib2
+# gives up on the first after the client library's 60s timeout without trying
+# the next, and each of three retries starts over at IPv6. A token refresh
+# reached IPv4, but only after 76s. So a Google host's addresses come back in
+# the order of a race, as a browser orders them (RFC 8305): the family the
+# resolver lists first starts, the other joins after a head start, and the one
+# that completes a handshake first is listed first. Installed on import, so a
+# script driving Client or Document gets it too.
+HEAD_START = 0.25     # RFC 8305's suggested delay before the next family starts
+GIVE_UP = 10          # seconds without a handshake on any family
+REMEMBER = 60         # seconds a fallback holds for its host – see getaddrinfo()
+GOOGLE = (".googleapis.com", ".google.com")
+FAMILY_NAMES = {socket.AF_INET6: "IPv6", socket.AF_INET: "IPv4"}
+
+
+class Unreachable(OSError):
+    """A Google host that completed no handshake in time, on any address.
+
+    Raised with EHOSTUNREACH, which neither httplib2 nor the client library
+    retries, so a dead network ends the call after one race rather than four.
+    """
+
+    def __str__(self):
+        return self.strerror or super().__str__()
+
+
+def network_failure(err):
+    """The Unreachable behind an error, or None.
+
+    Measured: a refresh raises google-auth's TransportError around three layers
+    from requests and urllib3, with the reason at the bottom. A chain can loop,
+    as the one credentials() re-raises does, so each link is visited once.
+    """
+    seen = set()
+    while err is not None and id(err) not in seen:
+        if isinstance(err, Unreachable):
+            return err
+        seen.add(id(err))
+        err = err.__cause__ or err.__context__
+    return None
+
+
+def handshake(family, address, timeout):
+    """Open one TCP connection and close it again – all a race needs to know."""
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        sock.connect(address)
+
+
+def race(infos, head_start=HEAD_START, give_up=GIVE_UP):
+    """The address family that completes a handshake first, or None.
+
+    One address per family, the resolver's first of each, in the resolver's
+    order – which is where a system's own preference for IPv4 shows. The first
+    family starts; the other starts once the head start is over, or at once
+    when the first fails. A loser runs on in its daemon thread until its own
+    timeout, and nothing waits on it.
+    """
+    firsts = {}
+    for family, _, _, _, address in infos:
+        if family in FAMILY_NAMES:
+            firsts.setdefault(family, address)
+    order = list(firsts.items())
+    verdicts = queue.Queue()
+
+    def attempt(family, address):
+        try:
+            handshake(family, address, give_up)
+            verdicts.put(family)
+        except OSError:
+            verdicts.put(None)
+
+    deadline = time.monotonic() + give_up
+    pending = 0
+    for n, (family, address) in enumerate(order, 1):
+        threading.Thread(target=attempt, args=(family, address), daemon=True).start()
+        pending += 1
+        last = n == len(order)
+        while pending:
+            until = deadline if last else min(deadline, time.monotonic() + head_start)
+            try:
+                won = verdicts.get(timeout=max(until - time.monotonic(), 0))
+            except queue.Empty:
+                break
+            pending -= 1
+            if won is not None:
+                return won
+            if not last:
+                break
+    return None
+
+
+plain_getaddrinfo = getattr(socket.getaddrinfo, "__wrapped__", socket.getaddrinfo)
+fallbacks = {}
+
+
+def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    """socket.getaddrinfo, with a Google host's families in the order they answer.
+
+    Every address is still returned, the losing family's last, so a caller that
+    tries them in turn keeps its own fallback. Any other host, a call asking for
+    one family, and one not asking for TCP – which a race of TCP handshakes says
+    nothing about – are passed through untouched.
+
+    Only a fallback is remembered, a race the resolver's first family lost: kept
+    too long, it merely costs that family's preference. A win by the first one
+    is raced again at the next connection instead – a network that turns on it
+    meanwhile, Wi-Fi to a phone's hotspot, would otherwise send that connection
+    straight into the hang. Connections are reused, so that is rarely a cost.
+    """
+    found = plain_getaddrinfo(host, port, family, type, proto, flags)
+    if (family != socket.AF_UNSPEC or type not in (0, socket.SOCK_STREAM) or not port
+            or not isinstance(host, str) or not host.lower().rstrip(".").endswith(GOOGLE)):
+        return found
+    families = [f for f in FAMILY_NAMES if any(info[0] == f for info in found)]
+    if not families:
+        return found
+    key = (host.lower(), port)
+    first, when = fallbacks.get(key, (None, None))
+    if when is None or time.monotonic() - when > REMEMBER:
+        first = race(found)
+        if first is None:
+            over = " or ".join(FAMILY_NAMES[f] for f in families)
+            raise Unreachable(errno.EHOSTUNREACH, f"no connection to {host} over {over} within "
+                                                  f"{GIVE_UP}s – is the network down?")
+        preferred = next(info[0] for info in found if info[0] in FAMILY_NAMES)
+        if first == preferred:
+            fallbacks.pop(key, None)
+        else:
+            fallbacks[key] = (first, time.monotonic())
+    return sorted(found, key=lambda info: info[0] != first)
+
+
+getaddrinfo.__wrapped__ = plain_getaddrinfo
+socket.getaddrinfo = getaddrinfo
+
+
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 DOCS_SCOPE = "https://www.googleapis.com/auth/documents"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
@@ -397,7 +542,14 @@ def credentials():
     # in auth.py cannot cause a scope-mismatch error here.
     creds = Credentials.from_authorized_user_info(data)
     if not creds.valid:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except TransportError as err:
+            # the reason is all a caller needs, not the four layers around it
+            dead = network_failure(err)
+            if dead is None:
+                raise
+            raise dead from None
         refreshed = json.loads(creds.to_json())
         # to_json() drops unknown keys, so both are re-added on every refresh
         refreshed["email"] = data.get("email", "")
