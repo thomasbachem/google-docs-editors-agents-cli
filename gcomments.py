@@ -15,11 +15,11 @@ import zipfile
 from collections import Counter
 from xml.etree import ElementTree
 
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-
+# gauth before anything of Google's – it hides the warnings they print on import
 from gauth import (DRIVE_SCOPE, RetryingRequest, ToolError, credentials,
                    http_error_message, require_scope, send)
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # What a listing asks Drive for. `resolved` can be absent rather than false on
 # a thread nobody ever resolved – measured on some sheets, not others – so it is

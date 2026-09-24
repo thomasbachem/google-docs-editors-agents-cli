@@ -25,11 +25,11 @@ import sys
 # is involved; without this oauthlib aborts the flow with "Scope has changed".
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
+# gauth before anything of Google's – it hides the warnings they print on import
+import gauth  # noqa: E402
 from google_auth_oauthlib.flow import InstalledAppFlow, WSGITimeoutError  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 from googleapiclient.errors import HttpError  # noqa: E402
-
-import gauth  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN = os.path.join(HERE, "token.json")

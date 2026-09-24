@@ -542,9 +542,12 @@ The wrappers are `/bin/sh` and resolve their own symlink chain, so a mount, a re
 on `PATH` all work. Why that takes more than swapping the shebang is commented in the wrappers
 themselves.
 
-On Python older than the version `google-api-core` wants, every invocation opens with a
-`FutureWarning`. It goes to **stderr**, so only a merged stream is polluted – `PYTHONWARNINGS=ignore`
-silences it either way.
+On Apple's Python 3.9.6 – a stock Mac's `python3` – `google-api-core`, `google-auth` (twice) and
+urllib3 each warn at import: end of life, and LibreSSL rather than OpenSSL. Measured 2026-09-24:
+eight lines of stderr per call, with everything working. `gauth` hides exactly those four before
+the first Google import – for the whole process, in-process too – and every other warning still
+shows. What they say holds: pip gives 3.9 older releases (`google-api-python-client` 2.198.0 that
+day), and `google-api-core` no further ones.
 
 ## An IPv6 route that never answers
 

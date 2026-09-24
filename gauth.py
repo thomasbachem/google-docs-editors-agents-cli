@@ -17,14 +17,24 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 from collections import namedtuple
 from urllib.parse import urlsplit
 
-from google.auth.exceptions import TransportError
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.errors import HttpError
-from googleapiclient.http import HttpRequest
+# A stock Mac's python3 is Apple's 3.9.6, and on it google-api-core, google-auth
+# (twice) and urllib3 each warn at import – eight lines of stderr on every call,
+# none of them a failure. Hidden before the first Google import below, which is
+# why every module imports gauth before anything of Google's; any other warning
+# still shows.
+warnings.filterwarnings("ignore", message=r"You are using a .*Python version",
+                        category=FutureWarning, module=r"google\.")
+warnings.filterwarnings("ignore", message=r"urllib3 v2 only supports OpenSSL", module="urllib3")
+
+from google.auth.exceptions import TransportError  # noqa: E402
+from google.auth.transport.requests import Request  # noqa: E402
+from google.oauth2.credentials import Credentials  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
+from googleapiclient.http import HttpRequest  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN = os.path.join(HERE, "token.json")

@@ -750,5 +750,71 @@ check("a second copy of gauth wraps the real resolver, not the first copy's wrap
       again.plain_getaddrinfo is ORIGINAL)
 socket.getaddrinfo = gauth.getaddrinfo
 
+# --- an old Python's import warnings: hidden, and only those ----------------
+print("\n--- import warnings on an old Python ---")
+import ast  # noqa: E402
+import warnings  # noqa: E402
+
+from urllib3.exceptions import NotOpenSSLWarning  # noqa: E402
+
+# Verbatim from Apple's 3.9.6, 2026-09-24
+API_CORE_EOL = ("You are using a non-supported Python version (3.9.6). Google will not post any "
+                "further updates to google.api_core supporting this Python version. Please "
+                "upgrade to the latest Python version, or at least Python 3.10, and then update "
+                "google.api_core.")
+AUTH_EOL = ("You are using a Python version 3.9 past its end of life. Google will update "
+            "google-auth with critical bug fixes on a best-effort basis, but not with any other "
+            "fixes or features. Please upgrade your Python version, and then update google-auth.")
+LIBRESSL = ("urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled "
+            "with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020")
+
+
+def shown(message, category, module):
+    """Whether a warning raised from `module` gets past the filters gauth installed."""
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.warn_explicit(message, category, module.replace(".", "/") + ".py", 1,
+                               module=module)
+    return bool(seen)
+
+
+check("google-api-core's end-of-life notice is hidden",
+      not shown(API_CORE_EOL, FutureWarning, "google.api_core._python_version_support"))
+check("google-auth's too, from both packages that print it",
+      not shown(AUTH_EOL, FutureWarning, "google.auth")
+      and not shown(AUTH_EOL, FutureWarning, "google.oauth2"))
+check("and urllib3's about Apple's LibreSSL", not shown(LIBRESSL, NotOpenSSLWarning, "urllib3"))
+check("any other warning from Google still shows",
+      shown("The parameter x is deprecated", FutureWarning, "google.auth"))
+check("as do the same words from anyone else", shown(AUTH_EOL, FutureWarning, "somebody.else"))
+
+ROOT = os.path.join(HERE, os.pardir)
+
+
+def top_level(path):
+    return ast.parse(open(os.path.join(ROOT, path)).read()).body
+
+
+def imported(node):
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    return [node.module or ""] if isinstance(node, ast.ImportFrom) else []
+
+
+late = []
+for name in ("gsheets.py", "gdocs.py", "gcomments.py", "auth.py"):
+    order = [module for node in top_level(name) for module in imported(node)]
+    google = next(i for i, module in enumerate(order) if module.startswith("google"))
+    ours = next((i for i, module in enumerate(order) if module in ("gauth", "gcomments")),
+                len(order))
+    if ours > google:
+        late.append(name)
+check("every module imports gauth before anything of Google's", not late, str(late))
+body = top_level("gauth.py")
+google = next(i for i, node in enumerate(body)
+              if any(module.startswith("google") for module in imported(node)))
+filters = [i for i, node in enumerate(body) if "filterwarnings" in ast.dump(node)]
+check("and gauth installs its filters before its own first Google import",
+      len(filters) == 2 and max(filters) < google, f"{filters} < {google}")
+
 print("\nFAILURES:", fails if fails else "none")
 sys.exit(1 if fails else 0)

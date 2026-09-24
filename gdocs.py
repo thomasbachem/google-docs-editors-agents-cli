@@ -117,13 +117,13 @@ import zipfile
 from collections import Counter
 from xml.etree import ElementTree
 
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-
+# gauth before anything of Google's – it hides the warnings they print on import
 import gcomments
 from gauth import (DOCS_SCOPE, DryRun, RetryingRequest, ToolError, account, as_int,
                    credentials, http_error_message, load_json, network_failure, project,
                    require_scope, send, split_flags)
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 DOC_URL = "https://docs.google.com/document/d/{}/edit"
 

@@ -309,13 +309,13 @@ import sys
 import zipfile
 from xml.etree import ElementTree
 
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-
+# gauth before anything of Google's – it hides the warnings they print on import
 import gcomments
 from gauth import (DryRun, RetryingRequest, ToolError, account, as_int, credentials,
                    http_error_message, load_json, network_failure, project, send,
                    split_flags)
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # "0.125", "1.234.567" – strings a non-English locale mis-parses (grouped
 # integer) or refuses to parse at all (left as text). Never the intended number.
