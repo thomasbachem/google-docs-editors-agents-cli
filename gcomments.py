@@ -2,8 +2,9 @@
 
 A comment on a spreadsheet or a document lives in the Drive API, not in the
 Sheets or Docs one, and Drive does not say where on the file it sits: its anchor
-is an opaque id neither of the other APIs mentions. Each CLI works the place out
-from an export in a format of its own. What is the same for both lives here –
+is an opaque id. Each CLI works the place out its own way – gsheets from the
+Sheets API, which lists every anchor with its cell when asked with an
+undocumented parameter, gdocs from a DOCX export. What is the same for both lives here –
 listing the threads, their fields, answering, resolving and reopening, and how
 a thread prints.
 """

@@ -16,7 +16,7 @@ and worth reading before you add a flag.
 | `gsheets`, `gdocs` | `/bin/sh` wrappers – self-locating through symlinks, so the directory can be renamed and they can go on `PATH` |
 | `gsheets.py`, `gdocs.py` | the two CLIs |
 | `gauth.py` | shared token handling, flag parsing, retries, error formatting, the IPv6/IPv4 race |
-| `gcomments.py` | the Drive comment threads both share – each CLI places them from an export of its own |
+| `gcomments.py` | the Drive comment threads both share – `gsheets` places them from the Sheets API's anchors, `gdocs` from a DOCX export |
 | `auth.py` | one-time browser consent |
 | `token.json`, `client_secret.json` | credentials, mode 600 – never tracked, never shared |
 | `scratch.local` | your own scratch surface ids, untracked – see **Leave the scratch surfaces empty** |
@@ -78,8 +78,8 @@ The token holds the full `drive` scope because comments, on a spreadsheet or a d
 only in the Drive API – and `drive.file`, by Google's own description, reaches only files the app
 created or was handed, which a file made in the editor is not (documented, not measured). Decided
 2026-09-14, after weighing a narrower split – reading comments with their cells needs no Drive
-scope at all, through the web export URL, measured, and only replying does – and choosing one
-consent for everybody over it.
+scope at all, measured, through the web export URL then and through the Sheets API's comment
+anchors since 2026-10-13, and only replying does – and choosing one consent for everybody over it.
 
 What stays true is narrower than it was: no command deletes, moves, renames or shares a file.
 That is now a promise of the code, not of the token, so keep it one – a command that does any of

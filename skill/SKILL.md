@@ -97,11 +97,11 @@ In Sheets:
   charts, merges - and counts duplicates, which is how a job run twice stacks rules
   invisibly until the sheet crawls.
 - **`comments` lists the open threads with the cell each is on**; `reply`, `resolve` and
-  `reopen` take the id it prints. Trust a cell printed bare; one followed by a remark in
-  brackets is in doubt, and a thread whose row or column was deleted says so rather than
-  pointing at A1. Nothing creates a comment on a cell - Google does not show one made that
-  way - so use `note` to put a remark on the cell itself, or reply to a thread already
-  there. A comment moves only with its cell - a `cutPaste` through `batch` carries both.
+  `reopen` take the id it prints. The cell comes from Sheets' own anchor, so a cell printed
+  is the cell; a thread whose row or column was deleted says so rather than pointing at A1,
+  and a comment made on a range sits on its top-left cell. Nothing creates a comment on a
+  cell - Google does not show one made that way - so use `note` to put a remark on the cell
+  itself, or reply to a thread already there. A comment moves only with its cell - a `cutPaste` through `batch` carries both.
 
 In Docs:
 
